@@ -1,19 +1,3 @@
-/*
-Copyright (c) Arm Limited and Contributors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package util
 
 import (
@@ -33,9 +17,6 @@ import (
 
 // file name in which volume context is stashed.
 const volumeContextFileName = "volume-context.json"
-
-// file name in which XPU context is stashed.
-const xpuContextFileName = "xpu-context.json"
 
 func ParseJSONFile(fileName string, result interface{}) error {
 	file, err := os.Open(fileName)
@@ -178,61 +159,6 @@ func GetNvmeDeviceName(nvmeModel, bdf string) (string, error) {
 	return waitForDeviceReady(deviceGlob, 20)
 }
 
-// GetVirtioBlkDevice returns a block device available at the
-// given bdf path. If wait is true then it wait till a device
-// appear at the bdf path.
-func GetVirtioBlkDeviceName(bdf string, wait bool) (string, error) {
-	// The parent dir path of the block device for VirtioBlk should be
-	// in the form of "/sys/bus/pci/devices/0000:01:01.0/virtio2/block"
-	sysBusGlob := fmt.Sprintf("/sys/bus/pci/devices/%s/virtio*/block", bdf)
-	var deviceParentDirPath string
-	var err error
-	if wait {
-		deviceParentDirPath, err = waitForDeviceReady(sysBusGlob, 20)
-	} else {
-		deviceParentDirPath, err = waitForDeviceReady(sysBusGlob, 0)
-	}
-	if err != nil {
-		klog.Errorf("could not find the deviceParentDirPath (%s): %s", sysBusGlob, err)
-		return "", err
-	}
-
-	// open the parent dir and read the dir for block device for VirtioBlk,
-	// eg, in the form of "vda", which is exactly the device name.
-	deviceName, err := os.ReadDir(deviceParentDirPath)
-	if err != nil {
-		klog.Errorf("could not open the deviceParentDirPath (%s): %s", sysBusGlob, err)
-		return "", err
-	}
-	if len(deviceName) != 1 {
-		return "", fmt.Errorf("the deviceParentDirPath (%s) has wrong content (%s)", sysBusGlob, deviceName)
-	}
-
-	// wait for the block device ready for VirtioBlk, eg, in the form of "/dev/vda"
-	deviceGlob := "/dev/" + deviceName[0].Name()
-
-	return waitForDeviceReady(deviceGlob, 20)
-}
-
-// GetAvailablePhysicalFunction returns next available Pf and Vf by checking
-// into sysfs for existing NVMe PCIe devices
-func GetAvailablePhysicalFunction(kvmBridgeCount int) (pf, vf uint32, err error) {
-	for pf = 1; pf <= uint32(kvmBridgeCount); pf++ {
-		for vf = 0; vf < 32; vf++ { // Assumption is that each PCI bridge supports
-			devicePaths, err := filepath.Glob(fmt.Sprintf("/sys/bus/pci/devices/0000:%02x:%02x.*", pf, vf))
-			if err != nil {
-				return 0, 0, fmt.Errorf("sysfs failure: %w", err)
-			}
-			if devicePaths == nil {
-				// No matching NVMe files found in sysfs, hence use
-				// the first available pf/vf
-				return pf - 1, vf, nil
-			}
-		}
-	}
-
-	return 0, 0, os.ErrNotExist
-}
 
 // ConvertInterfaceToMap converts an interface to a map[string]string
 func ConvertInterfaceToMap(data interface{}) (map[string]string, error) {
@@ -317,24 +243,4 @@ func LookupVolumeContext(path string) (map[string]string, error) {
 // CleanUpVolumeContext cleans up any stashed volume context at passed in path.
 func CleanUpVolumeContext(path string) error {
 	return cleanUpContext(path, volumeContextFileName)
-}
-
-// StashXPUContext stashes XPU context into the volumeContextFileName at the passed in path, in
-// JSON format.
-func StashXPUContext(xpuContext map[string]string, path string) error {
-	return stashContext(xpuContext, path, xpuContextFileName)
-}
-
-// LookupXPUContext read and returns stashed XPU context at passed in path
-func LookupXPUContext(path string) (map[string]string, error) {
-	data, err := lookupContext(path, xpuContextFileName)
-	if err != nil {
-		return nil, err
-	}
-	return ConvertInterfaceToMap(data)
-}
-
-// CleanUpXPUContext cleans up any stashed XPU context at passed in path.
-func CleanUpXPUContext(path string) error {
-	return cleanUpContext(path, xpuContextFileName)
 }

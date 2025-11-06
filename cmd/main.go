@@ -34,7 +34,7 @@ func init() {
 }
 
 func main() {
-	klog.Infof("Starting SPDK-CSI driver: %v version: %v", conf.DriverName, driverVersion)
+	klog.Infof("Starting MGX-CSI driver: %v version: %v", conf.DriverName, driverVersion)
 
 	mgx.Run(&conf)
 

@@ -57,7 +57,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	volumeInfo, err := cs.publishVolume(csiVolume.GetVolumeId(), mgxClient)
 	if err != nil {
 		klog.Errorf("failed to publish volume, volumeID: %s err: %v", volumeID, err)
-		cs.deleteVolume(csiVolume.GetVolumeId()) //nolint:errcheck
+		cs.deleteVolume(csiVolume.GetVolumeId(), mgxClient) //nolint:errcheck
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -77,8 +77,14 @@ func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 	volumeID := req.GetVolumeId()
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
+
+	mgxClient, err := util.NewMGXClient()
+	if err != nil {
+		return nil, err
+	}
+
 	// no harm if volume already unpublished
-	err := cs.unpublishVolume(volumeID)
+	err := cs.unpublishVolume(volumeID, mgxClient)
 	switch {
 	case errors.Is(err, util.ErrVolumeUnpublished):
 		// unpublished but not deleted in last request?
@@ -92,7 +98,7 @@ func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 	}
 
 	// no harm if volume already deleted
-	err = cs.deleteVolume(volumeID)
+	err = cs.deleteVolume(volumeID, mgxClient)
 	if errors.Is(err, util.ErrJSONNoSuchDevice) {
 		// deleted in previous request?
 		klog.Warningf("volume not exists: %s", volumeID)
@@ -342,27 +348,21 @@ func (cs *controllerServer) publishVolume(volumeID string, mgxClient *util.NodeN
 	return volumeInfo, nil
 }
 
-func (cs *controllerServer) deleteVolume(volumeID string) error {
+func (cs *controllerServer) deleteVolume(volumeID string, mgxClient *util.NodeNVMf) error {
 	mgxVol, err := getMGXVol(volumeID)
 	if err != nil {
 		return err
 	}
-	mgxClient, err := util.NewMGXClient()
-	if err != nil {
-		return err
-	}
+
 	return mgxClient.DeleteVolume(mgxVol.lvolID)
 }
 
-func (cs *controllerServer) unpublishVolume(volumeID string) error {
+func (cs *controllerServer) unpublishVolume(volumeID string, mgxClient *util.NodeNVMf) error {
 	mgxVol, err := getMGXVol(volumeID)
 	if err != nil {
 		return err
 	}
-	mgxVol, err := util.NewMGXClient()
-	if err != nil {
-		return err
-	}
+
 	return mgxClient.UnpublishVolume(mgxVol.lvolID)
 }
 

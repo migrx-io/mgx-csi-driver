@@ -18,16 +18,14 @@ import (
 )
 
 const (
-	// DevDiskByID is the path to the device file under /dev/disk/by-id
-	DevDiskByID = "/dev/disk/by-id/*%s*"
-
-	// TargetTypeNVMf is the target type for NVMe over Fabrics
-	TargetTypeTCP  = "tcp"
+	reconnectDelay  = 2
+	ctrlLossTmo     = 30
+	fastIOFailTmp   = 30
 )
+
 
 // MGXCsiInitiator defines interface for NVMeoF initiator
 //   - Connect initiates target connection and returns local block device filename
-//     e.g., /dev/disk/by-id/nvme-SPDK_Controller1_SPDK00000000000001
 //   - Disconnect terminates target connection
 //   - Caller(node service) should serialize calls to same initiator
 //   - Implementation should be idempotent to duplicated requests
@@ -38,245 +36,59 @@ type MGXCsiInitiator interface {
 
 // initiatorNVMf is an implementation of NVMf tcp initiator
 type initiatorNVMf struct {
-	targetType     string
-	connections    []connectionInfo
 	nqn            string
-	reconnectDelay string
-	nrIoQueues     string
-	ctrlLossTmo    string
-	model          string
-	nsId           string
+	ip             string
+	port           int
+	status         string
+	reconnectDelay int
+	ctrlLossTmo    int
+	fastIOFailTmo  int
 }
-
-type path struct {
-	Name      string `json:"Name"`
-	Transport string `json:"Transport"`
-	Address   string `json:"Address"`
-	State     string `json:"State"`
-	ANAState  string `json:"ANAState"`
-}
-
-type subsystem struct {
-	Name  string `json:"Name"`
-	NQN   string `json:"NQN"`
-	Paths []path `json:"Paths"`
-}
-
-type subsystemResponse struct {
-	Subsystems []subsystem `json:"Subsystems"`
-}
-
-type NodeInfo struct {
-	NodeID string   `json:"node_id"`
-	Nodes  []string `json:"nodes"`
-	Status string   `json:"status"`
-}
-
-type nvmeDeviceInfo struct {
-	devicePath   string
-	serialNumber string
-}
-
-var (
-	deviceSubsystemMap = make(map[string]bool)
-	mu                 sync.Mutex
-)
 
 // clusterConfig represents the Kubernetes secret structure
 type ClusterConfig struct {
-	ClusterID       string `json:"cluster_id"`
-	ClusterEndpoint string `json:"cluster_endpoint"`
-	ClusterSecret   string `json:"cluster_secret"`
+	Nodes       []string `json:"nodes"`
+	APIKey      string   `json:"apiKey"`
 }
 
-type ClustersInfo struct {
-	Clusters []ClusterConfig `json:"clusters"`
-}
-
-// NewsimplyBlockClient create a new Simplyblock client
-// should be called for every CSI driver operation
-func NewsimplyBlockClient(clusterID string) (*NodeNVMf, error) {
-	secretFile := FromEnv("SPDKCSI_SECRET", "/etc/spdkcsi-secret/secret.json")
-	var clusters ClustersInfo
-	err := ParseJSONFile(secretFile, &clusters)
+func NewMGXClient(clusterID string) (*NodeNVMf, error) {
+	secretFile := FromEnv("MGX_SECRET", "/etc/csi-secret/secret.json")
+	var clusterConfig ClusterConfig
+	err := ParseJSONFile(secretFile, &cluster)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse secret file: %w", err)
-	}
-
-	var clusterConfig *ClusterConfig
-	for _, cluster := range clusters.Clusters {
-		if cluster.ClusterID == clusterID {
-			clusterConfig = &cluster
-			break
-		}
 	}
 
 	if clusterConfig == nil {
 		return nil, fmt.Errorf("failed to find secret for clusterID %s", clusterID)
 	}
 
-	if clusterConfig.ClusterEndpoint == "" || clusterConfig.ClusterSecret == "" {
-		return nil, fmt.Errorf("invalid cluster configuration for clusterID %s", clusterID)
+	if len(clusterConfig.Nodes) == 0 || clusterConfig.APIKey == "" {
+		return nil, fmt.Errorf("invalid cluster configuration")
 	}
 
 	// Log and return the newly created Simplyblock client.
-	klog.Infof("Simplyblock client created for ClusterID:%s, Endpoint:%s",
-		clusterConfig.ClusterID,
-		clusterConfig.ClusterEndpoint,
+	klog.Infof("MGX client created for Nodes:%s",
+		clusterConfig.Nodes
 	)
-	return NewNVMf(clusterID, clusterConfig.ClusterEndpoint, clusterConfig.ClusterSecret), nil
+
+	return NewNVMf(clusterConfig), nil
 }
 
-// NewSpdkCsiInitiator creates a new SpdkCsiInitiator based on the target type
-func NewSpdkCsiInitiator(volumeContext map[string]string) (SpdkCsiInitiator, error) {
-	targetType := strings.ToLower(volumeContext["targetType"])
-	klog.Infof("Simplyblock targetType created :%s", targetType)
-	switch targetType {
-	case TargetTypeTCP, TargetTypeRDMA:
-		var connections []connectionInfo
+func NewMGXCsiInitiator(volumeContext map[string]string) (SpdkCsiInitiator, error) {
 
-		err := json.Unmarshal([]byte(volumeContext["connections"]), &connections)
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshall connections. Error: %v", err.Error())
-		}
+	klog.Infof("mgx nqn :%s", volumeContext["nqn"])
 
-		return &initiatorNVMf{
-			targetType:     volumeContext["targetType"],
-			connections:    connections,
-			nqn:            volumeContext["nqn"],
-			reconnectDelay: volumeContext["reconnectDelay"],
-			nrIoQueues:     volumeContext["nrIoQueues"],
-			ctrlLossTmo:    volumeContext["ctrlLossTmo"],
-			model:          volumeContext["model"],
-			nsId:           volumeContext["nsId"],
-		}, nil
+	return &initiatorNVMf{
+		nqn:			volumeContext["nqn"],
+		ip:				volumeContext["ip"],
+		port:			volumeContext["proxy_port"],
+		status:         volumeContext["status"],
+		reconnectDelay: reconnectDelay,
+		ctrlLossTmo:    ctrlLossTmo,
+		fastIOFailTmo:  fastIOFailTmo,
+	}, nil
 
-	case "cache":
-		return &initiatorCache{
-			lvol:  volumeContext["uuid"],
-			model: volumeContext["model"],
-		}, nil
-
-	default:
-		return nil, fmt.Errorf("unknown initiator: %s", targetType)
-	}
-}
-
-func (cache *initiatorCache) Connect() (string, error) {
-	// get the hostname
-	hostname, err := os.Hostname()
-	if err != nil {
-		panic(err)
-	}
-	hostname = strings.Split(hostname, ".")[0]
-	klog.Info("hostname: ", hostname)
-
-	out, err := cache.client.CallSBCLI("GET", "/cachingnode", nil)
-	if err != nil {
-		klog.Error(err)
-		return "", err
-	}
-
-	data, err := json.Marshal(out)
-	if err != nil {
-		return "", err
-	}
-	var cnodes []*cachingNodeList
-	err = json.Unmarshal(data, &cnodes)
-	if err != nil {
-		return "", err
-	}
-
-	klog.Info("found caching nodes: ", cnodes)
-
-	isCachingNodeConnected := false
-	for _, cnode := range cnodes {
-		if hostname != cnode.Hostname {
-			continue
-		}
-
-		var resp interface{}
-		req := lVolCachingNodeConnect{
-			LvolID: cache.lvol,
-		}
-		klog.Info("connecting caching node: ", cnode.Hostname, " with lvol: ", cache.lvol)
-		resp, err = cache.client.CallSBCLI("PUT", "/cachingnode/connect/"+cnode.UUID, req)
-		if err != nil {
-			klog.Error("caching node connect error:", err)
-			return "", err
-		}
-		klog.Info("caching node connect resp: ", resp)
-		isCachingNodeConnected = true
-	}
-
-	if !isCachingNodeConnected {
-		return "", errors.New("failed to find the caching node")
-	}
-
-	// get the caching node ID associated with the hostname
-	// connect lvol and caching node
-
-	deviceGlob := fmt.Sprintf(DevDiskByID, cache.model)
-	devicePath, err := waitForDeviceReady(deviceGlob, 20)
-	if err != nil {
-		return "", err
-	}
-	return devicePath, nil
-}
-
-func (cache *initiatorCache) Disconnect() error {
-	// get the hostname
-	// get the caching node ID associated with the hostname
-	// connect lvol and caching node
-
-	hostname, err := os.Hostname()
-	if err != nil {
-		os.Exit(1)
-	}
-	hostname = strings.Split(hostname, ".")[0]
-	klog.Info("hostname: ", hostname)
-
-	out, err := cache.client.CallSBCLI("GET", "/cachingnode", nil)
-	if err != nil {
-		klog.Error(err)
-		return err
-	}
-
-	data, err := json.Marshal(out)
-	if err != nil {
-		return err
-	}
-	var cnodes []*cachingNodeList
-	err = json.Unmarshal(data, &cnodes)
-	if err != nil {
-		return err
-	}
-	klog.Info("found caching nodes: ", cnodes)
-
-	isCachingNodeConnected := false
-	for _, cnode := range cnodes {
-		if hostname != cnode.Hostname {
-			continue
-		}
-		klog.Info("disconnect caching node: ", cnode.Hostname, "with lvol: ", cache.lvol)
-		req := lVolCachingNodeConnect{
-			LvolID: cache.lvol,
-		}
-		resp, err := cache.client.CallSBCLI("PUT", "/cachingnode/disconnect/"+cnode.UUID, req)
-		if err != nil {
-			klog.Error("caching node disconnect error:", err)
-			return err
-		}
-		klog.Info("caching node disconnect resp: ", resp)
-		isCachingNodeConnected = true
-	}
-
-	if !isCachingNodeConnected {
-		return errors.New("failed to find the caching node")
-	}
-
-	deviceGlob := fmt.Sprintf(DevDiskByID, cache.model)
-	return waitForDeviceGone(deviceGlob)
 }
 
 func execWithTimeoutRetry(cmdLine []string, timeout, retry int) (err error) {
@@ -291,11 +103,8 @@ func execWithTimeoutRetry(cmdLine []string, timeout, retry int) (err error) {
 }
 
 func (nvmf *initiatorNVMf) Connect() (string, error) {
-	klog.Info("connections", nvmf.connections)
-	ctrlLossTmo := 60
-	if len(nvmf.connections) == 1 {
-		ctrlLossTmo *= 15
-	}
+
+	klog.Info("coonect to ", nvmf.nqn)
 
 	alreadyConnected, err := isNqnConnected(nvmf.nqn)
 	if err != nil {
@@ -304,7 +113,7 @@ func (nvmf *initiatorNVMf) Connect() (string, error) {
 	}
 
 	if !alreadyConnected {
-		clusterID, lvolID := getLvolIDFromNQN(nvmf.nqn)
+
 		sbcClient, err := NewsimplyBlockClient(clusterID)
 		if err != nil {
 			klog.Errorf("failed to create SPDK client: %v", err)
@@ -522,16 +331,6 @@ func getSubsystemsForDevice(devicePath string) ([]subsystemResponse, error) {
 	return subsystems, nil
 }
 
-func getLvolIDFromNQN(nqn string) (clusterID, lvolID string) {
-	parts := strings.Split(nqn, ":lvol:")
-	if len(parts) > 1 {
-		subparts := strings.Split(parts[0], ":")
-		clusterID := subparts[len(subparts)-1]
-		lvolID := parts[1]
-		return clusterID, lvolID
-	}
-	return "", ""
-}
 
 func parseAddress(address string) string {
 	parts := strings.Split(address, ",")
