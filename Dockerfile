@@ -14,7 +14,6 @@ COPY cmd ./cmd
 COPY pkg ./pkg
 RUN make build
 
-############## Final stage ##############
 
 FROM alpine:latest
 LABEL maintainers="support@migrx.io" \

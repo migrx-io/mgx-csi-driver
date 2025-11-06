@@ -1,17 +1,3 @@
-/*
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package util
 
 import (
@@ -37,19 +23,15 @@ const (
 
 	// TargetTypeNVMf is the target type for NVMe over Fabrics
 	TargetTypeTCP  = "tcp"
-	TargetTypeRDMA = "rdma"
-
-	// TargetTypeISCSI is the target type for cache
-	TargetTypeCache = "cache"
 )
 
-// SpdkCsiInitiator defines interface for NVMeoF/iSCSI initiator
+// MGXCsiInitiator defines interface for NVMeoF initiator
 //   - Connect initiates target connection and returns local block device filename
 //     e.g., /dev/disk/by-id/nvme-SPDK_Controller1_SPDK00000000000001
 //   - Disconnect terminates target connection
 //   - Caller(node service) should serialize calls to same initiator
 //   - Implementation should be idempotent to duplicated requests
-type SpdkCsiInitiator interface {
+type MGXCsiInitiator interface {
 	Connect() (string, error)
 	Disconnect() error
 }
@@ -64,22 +46,6 @@ type initiatorNVMf struct {
 	ctrlLossTmo    string
 	model          string
 	nsId           string
-}
-
-// initiatorCache is an implementation of NVMf cache initiator
-type initiatorCache struct {
-	lvol   string
-	model  string
-	client RPCClient // TODO: support multi cluster for cache
-}
-
-type cachingNodeList struct {
-	Hostname string `json:"hostname"`
-	UUID     string `json:"id"`
-}
-
-type lVolCachingNodeConnect struct {
-	LvolID string `json:"lvol_id"`
 }
 
 type path struct {

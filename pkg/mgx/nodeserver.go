@@ -1,20 +1,4 @@
-/*
-Copyright (c) Arm Limited and Contributors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
-package spdk
+package mgx
 
 import (
 	"context"
@@ -38,17 +22,14 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
-	csicommon "github.com/spdk/spdk-csi/pkg/csi-common"
-	"github.com/spdk/spdk-csi/pkg/util"
+	csicommon "github.com/migrx-io/mgx-csi-driver/pkg/csi-common"
+	"github.com/migrx-io/mgx-csi-driver/pkg/util"
 )
 
 type nodeServer struct {
 	*csicommon.DefaultNodeServer
 	mounter       mount.Interface
 	volumeLocks   *util.VolumeLocks
-	xpuConnClient *grpc.ClientConn
-	xpuTargetType string
-	kvmPciBridges int
 	kubeClient    kubernetes.Interface
 }
 
@@ -71,127 +52,18 @@ func newNodeServer(d *csicommon.CSIDriver) (*nodeServer, error) {
 		}
 	}
 
-	// get xPU nodes' configs, see deploy/kubernetes/nodeserver-config-map.yaml
-	// as spdkcsi-nodeservercm configMap volume is optional when deploying k8s, check nodeserver-config-map.yaml is missing or empty
-	spdkcsiNodeServerConfigFile := "/etc/spdkcsi-nodeserver-config/nodeserver-config.json"
-	spdkcsiNodeServerConfigFileEnv := "SPDKCSI_CONFIG_NODESERVER"
-	configFile := util.FromEnv(spdkcsiNodeServerConfigFileEnv, spdkcsiNodeServerConfigFile)
-	_, err = os.Stat(configFile)
-	klog.Infof("check whether the configuration file (%s) which is supposed to contain xPU info exists", spdkcsiNodeServerConfigFile)
-	if os.IsNotExist(err) {
-		klog.Infof("configuration file specified in %s (%s by default) is missing or empty", spdkcsiNodeServerConfigFileEnv, spdkcsiNodeServerConfigFile)
-		return ns, nil
-	}
-	//nolint:tagliatelle // not using json:snake case
-	var config struct {
-		XPUList []struct {
-			Name       string `json:"name"`
-			TargetType string `json:"targetType"`
-			TargetAddr string `json:"targetAddr"`
-		} `json:"xpuList"`
-		KvmPciBridges int `json:"kvmPciBridges,omitempty"`
-	}
-
-	err = util.ParseJSONFile(configFile, &config)
-	if err != nil {
-		return nil, fmt.Errorf("error in the configuration file specified in %s (%s by default): %w", spdkcsiNodeServerConfigFileEnv, spdkcsiNodeServerConfigFile, err)
-	}
-	klog.Infof("obtained xPU info (%v) from configuration file (%s)", config.XPUList, spdkcsiNodeServerConfigFile)
-
-	ns.kvmPciBridges = config.KvmPciBridges
-	klog.Infof("obtained KvmPciBridges num (%v) from configuration file (%s)", config.KvmPciBridges, spdkcsiNodeServerConfigFile)
-
-	// try to set up a connection to the first available xPU node in the list via grpc
-	// once the connection is built, send pings every 10 seconds if there is no activity
-	// FIXME (JingYan): when there are multiple xPU nodes, find a better way to choose one to connect with
-
-	var xpuConnClient, conn *grpc.ClientConn
-	var xpuTargetType string
-
-	for i := range config.XPUList {
-		if config.XPUList[i].TargetType != "" && config.XPUList[i].TargetAddr != "" {
-			klog.Infof("TargetType: %v, TargetAddr: %v.", config.XPUList[i].TargetType, config.XPUList[i].TargetAddr)
-			conn, err = grpc.Dial(
-				config.XPUList[i].TargetAddr,
-				grpc.WithTransportCredentials(insecure.NewCredentials()),
-				grpc.WithBlock(),
-				grpc.WithKeepaliveParams(keepalive.ClientParameters{
-					Time:                10 * time.Second,
-					Timeout:             1 * time.Second,
-					PermitWithoutStream: true,
-				}),
-				grpc.FailOnNonTempDialError(true),
-			)
-			if err != nil {
-				klog.Errorf("failed to connect to xPU node in: %s, %s", config.XPUList[i].TargetAddr, err)
-			} else {
-				klog.Infof("connected to xPU node %v with TargetType as %v", config.XPUList[i].TargetAddr, config.XPUList[i].TargetType)
-				xpuConnClient = conn
-				xpuTargetType = config.XPUList[i].TargetType
-				break
-			}
-		} else {
-			klog.Errorf("missing xPU TargetType or TargetAddr in xPUList index %d, skipping this xPU node", i)
-		}
-	}
-	if xpuConnClient == nil && xpuTargetType == "" {
-		klog.Infof("failed to connect to any xPU node in the xpuList or xpuList is empty, will continue without xPU node")
-	}
-	ns.xpuConnClient = xpuConnClient
-	ns.xpuTargetType = xpuTargetType
-
 	go util.MonitorConnection()
 
 	return ns, nil
 }
 
 func (ns *nodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
-	topology := ns.buildAccessibleTopology(ctx)
 
 	response := &csi.NodeGetInfoResponse{
 		NodeId: ns.Driver.GetNodeID(),
 	}
 
-	if len(topology) > 0 {
-		response.AccessibleTopology = &csi.Topology{Segments: topology}
-	}
-
 	return response, nil
-}
-
-func (ns *nodeServer) buildAccessibleTopology(ctx context.Context) map[string]string {
-	if ns.kubeClient == nil {
-		return nil
-	}
-
-	nodeName := ns.Driver.GetNodeID()
-	if nodeName == "" {
-		return nil
-	}
-
-	node, err := ns.kubeClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
-	if err != nil {
-		klog.Warningf("failed to get node %s for topology discovery: %v", nodeName, err)
-		return nil
-	}
-
-	segments := make(map[string]string)
-
-	if zone, ok := node.Labels[topologyKeyZoneStable]; ok && zone != "" {
-		segments[topologyKeyZoneStable] = zone
-	} else if zone, ok := node.Labels[topologyKeyZoneBeta]; ok && zone != "" {
-		segments[topologyKeyZoneStable] = zone
-	}
-
-	if region, ok := node.Labels[topologyKeyRegionStable]; ok && region != "" {
-		segments[topologyKeyRegionStable] = region
-	}
-
-	if len(segments) == 0 {
-		return nil
-	}
-
-	return segments
 }
 
 func (ns *nodeServer) NodeGetVolumeStats(_ context.Context, _ *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
@@ -199,6 +71,7 @@ func (ns *nodeServer) NodeGetVolumeStats(_ context.Context, _ *csi.NodeGetVolume
 }
 
 func (ns *nodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+
 	volumeID := req.GetVolumeId()
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
@@ -216,13 +89,13 @@ func (ns *nodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolum
 		return &csi.NodeStageVolumeResponse{}, nil
 	}
 
-	var initiator util.SpdkCsiInitiator
+	var initiator util.MGXCsiInitiator
 	vc := req.GetVolumeContext()
 
 	vc["stagingParentPath"] = stagingParentPath
-	initiator, err = util.NewSpdkCsiInitiator(vc)
+	initiator, err = util.NewMGXCsiInitiator(vc)
 	if err != nil {
-		klog.Errorf("failed to create spdk initiator, volumeID: %s err: %v", volumeID, err)
+		klog.Errorf("failed to create mgx initiator, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -271,9 +144,9 @@ func (ns *nodeServer) NodeUnstageVolume(_ context.Context, req *csi.NodeUnstageV
 		klog.Errorf("failed to lookup volume context, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	initiator, err := util.NewSpdkCsiInitiator(volumeContext)
+	initiator, err := util.NewMGXCsiInitiator(volumeContext)
 	if err != nil {
-		klog.Errorf("failed to create spdk initiator, volumeID: %s err: %v", volumeID, err)
+		klog.Errorf("failed to create mgx initiator, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	err = initiator.Disconnect() // idempotent
@@ -397,26 +270,9 @@ func (ns *nodeServer) stageVolume(devicePath, stagingPath string, req *csi.NodeS
 		return nil
 	}
 	fsType := req.GetVolumeCapability().GetMount().GetFsType()
-	// if fsType is not specified, use ext4 as default
-	if fsType == "" {
-		fsType = "ext4"
-	}
 
 	mntFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
 	formatOptions := []string{}
-
-	if fsType == "xfs" {
-		distrNdcs, errNdcs := strconv.Atoi(volumeContext["distr_ndcs"])
-		if errNdcs != nil {
-			return errNdcs
-		}
-
-		formatOptions = append(formatOptions, "-d", fmt.Sprintf("sunit=%d,swidth=%d", 8*distrNdcs, 8*distrNdcs), "-l", fmt.Sprintf("sunit=%d", 8*distrNdcs))
-
-		// By default, xfs does not allow mounting of two volumes with the same filesystem uuid.
-		// Force ignore this uuid to be able to mount volume + its clone / restored snapshot on the same node.
-		mntFlags = append(mntFlags, "nouuid")
-	}
 
 	switch req.GetVolumeCapability().GetAccessMode().GetMode() {
 	case csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY,
@@ -436,21 +292,6 @@ func (ns *nodeServer) stageVolume(devicePath, stagingPath string, req *csi.NodeS
 	err = mounter.FormatAndMountSensitiveWithFormatOptions(devicePath, stagingPath, fsType, mntFlags, nil, formatOptions)
 	if err != nil {
 		return err
-	}
-
-	if fsType == "ext4" {
-		reserved := volumeContext["tune2fs_reserved_blocks"]
-		if reserved != "" {
-			cmd := osexec.Command("tune2fs", "-m", reserved, devicePath)
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				klog.Errorf("Failed to apply tune2fs -m %s on %s: %v\nOutput: %s", reserved, devicePath, err, string(output))
-				return fmt.Errorf("tune2fs failed: %w", err)
-			}
-			klog.Infof("Applied tune2fs -m %s on %s", reserved, devicePath)
-		} else {
-			klog.Infof("No tune2fs_reserved_blocks set; skipping tune2fs adjustment")
-		}
 	}
 
 	return nil
