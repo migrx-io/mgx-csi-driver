@@ -30,29 +30,15 @@ type nodeServer struct {
 	*csicommon.DefaultNodeServer
 	mounter       mount.Interface
 	volumeLocks   *util.VolumeLocks
-	kubeClient    kubernetes.Interface
 }
 
 func newNodeServer(d *csicommon.CSIDriver) (*nodeServer, error) {
+
 	ns := &nodeServer{
 		DefaultNodeServer: csicommon.NewDefaultNodeServer(d),
 		mounter:           mount.New(""),
 		volumeLocks:       util.NewVolumeLocks(),
 	}
-
-	k8sConfig, err := rest.InClusterConfig()
-	if err != nil {
-		klog.Warningf("failed to get in-cluster config for node topology discovery: %v", err)
-	} else {
-		clientset, clientErr := kubernetes.NewForConfig(k8sConfig)
-		if clientErr != nil {
-			klog.Warningf("failed to create kubernetes client for node topology discovery: %v", clientErr)
-		} else {
-			ns.kubeClient = clientset
-		}
-	}
-
-	go util.MonitorConnection()
 
 	return ns, nil
 }
@@ -257,43 +243,6 @@ func (ns *nodeServer) NodeExpandVolume(_ context.Context, req *csi.NodeExpandVol
 //
 //nolint:cyclop // many cases in switch increases complexity
 func (ns *nodeServer) stageVolume(devicePath, stagingPath string, req *csi.NodeStageVolumeRequest, volumeContext map[string]string) error {
-	if req.GetVolumeCapability().GetBlock() != nil {
-		klog.Infof("NodeStageVolume: called for volume %s. Skipping staging since it is a block device.", req.GetVolumeId())
-		return nil
-	}
-
-	mounted, err := ns.createMountPoint(stagingPath)
-	if err != nil {
-		return err
-	}
-	if mounted {
-		return nil
-	}
-	fsType := req.GetVolumeCapability().GetMount().GetFsType()
-
-	mntFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
-	formatOptions := []string{}
-
-	switch req.GetVolumeCapability().GetAccessMode().GetMode() {
-	case csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY,
-		csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY:
-		mntFlags = append(mntFlags, "ro")
-	case csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER:
-	case csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER:
-	case csi.VolumeCapability_AccessMode_SINGLE_NODE_MULTI_WRITER:
-	case csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER:
-	case csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER:
-	case csi.VolumeCapability_AccessMode_UNKNOWN:
-	}
-
-	klog.Infof("mount %s to %s, fstype: %s, flags: %v", devicePath, stagingPath, fsType, mntFlags)
-	klog.Infof("formatOptions %v", formatOptions)
-	mounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
-	err = mounter.FormatAndMountSensitiveWithFormatOptions(devicePath, stagingPath, fsType, mntFlags, nil, formatOptions)
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -318,34 +267,24 @@ func (ns *nodeServer) publishVolume(stagingPath string, req *csi.NodePublishVolu
 
 	fsType := req.GetVolumeCapability().GetMount().GetFsType()
 
-	if req.GetVolumeCapability().GetBlock() != nil {
-		stagingParentPath := req.GetStagingTargetPath()
-		volumeContext, err := util.LookupVolumeContext(stagingParentPath)
-		if err != nil {
-			return status.Errorf(codes.Internal, "failed to retrieve volume context for volume %s: %v", req.GetVolumeId(), err)
-		}
+	stagingParentPath := req.GetStagingTargetPath()
+	volumeContext, err := util.LookupVolumeContext(stagingParentPath)
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to retrieve volume context for volume %s: %v", req.GetVolumeId(), err)
+	}
 
-		devicePath, ok := volumeContext["devicePath"]
-		if !ok || devicePath == "" {
-			return status.Errorf(codes.Internal, "could not find device path for volume %s", req.GetVolumeId())
-		}
-		stagingPath = devicePath
+	devicePath, ok := volumeContext["devicePath"]
+	if !ok || devicePath == "" {
+		return status.Errorf(codes.Internal, "could not find device path for volume %s", req.GetVolumeId())
+	}
+	stagingPath = devicePath
 
-		fsType = ""
-		if err = ns.MakeFile(targetPath); err != nil {
-			if removeErr := os.Remove(targetPath); removeErr != nil {
-				return status.Errorf(codes.Internal, "Could not remove mount target %q: %v", targetPath, removeErr)
-			}
-			return status.Errorf(codes.Internal, "Could not create file %q: %v", targetPath, err)
+	fsType = ""
+	if err = ns.MakeFile(targetPath); err != nil {
+		if removeErr := os.Remove(targetPath); removeErr != nil {
+			return status.Errorf(codes.Internal, "Could not remove mount target %q: %v", targetPath, removeErr)
 		}
-	} else if req.GetVolumeCapability().GetMount() != nil {
-		mounted, err := ns.createMountPoint(targetPath)
-		if err != nil {
-			return err
-		}
-		if mounted {
-			return nil
-		}
+		return status.Errorf(codes.Internal, "Could not create file %q: %v", targetPath, err)
 	}
 
 	mntFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
@@ -354,18 +293,6 @@ func (ns *nodeServer) publishVolume(stagingPath string, req *csi.NodePublishVolu
 	return ns.mounter.Mount(stagingPath, targetPath, fsType, mntFlags)
 }
 
-// create mount point if not exists, return whether already mounted
-func (ns *nodeServer) createMountPoint(path string) (bool, error) {
-	isMount, err := ns.mounter.IsMountPoint(path)
-	if os.IsNotExist(err) {
-		isMount = false
-		err = os.MkdirAll(path, 0o755)
-	}
-	if isMount {
-		klog.Infof("%s already mounted", path)
-	}
-	return isMount, err
-}
 
 // unmount and delete mount point, must be idempotent
 func (ns *nodeServer) deleteMountPoint(path string) error {

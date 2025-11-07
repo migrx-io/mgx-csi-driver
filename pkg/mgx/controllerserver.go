@@ -132,8 +132,10 @@ func (cs *controllerServer) ValidateVolumeCapabilities(_ context.Context, req *c
 }
 
 func (cs *controllerServer) CreateSnapshot(_ context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
-	volumeID := req.GetSourceVolumeId()
+
+	volumeID := req.GetSourcVolumeId()
 	klog.Infof("CreateSnapshot : volumeID=%s", volumeID)
+
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
 
@@ -185,6 +187,7 @@ func (cs *controllerServer) CreateSnapshot(_ context.Context, req *csi.CreateSna
 }
 
 func (cs *controllerServer) DeleteSnapshot(_ context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
+
 	csiSnapshotID := req.GetSnapshotId()
 	mgxSnapshot, err := getSnapshot(csiSnapshotID)
 	if err != nil {
@@ -311,7 +314,7 @@ func (cs *controllerServer) createVolume(ctx context.Context, req *csi.CreateVol
 		return nil, err
 	}
 
-	vol.VolumeId = fmt.Sprintf("%s", volumeID)
+	vol.VolumeId = volumeID
 	klog.V(5).Info("successfully created volume from mgx with Volume ID: ", vol.GetVolumeId())
 
 	return &vol, nil

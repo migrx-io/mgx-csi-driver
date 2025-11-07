@@ -14,7 +14,7 @@ type NodeNVMf struct {
 }
 
 // NewNVMf creates a new NVMf client
-func NewNVMf(clusterID, clusterIP, clusterSecret string) *NodeNVMf {
+func NewNVMf(config *ClusterConfig) *NodeNVMf {
 	client := RPCClient{
 		HTTPClient:    &http.Client{Timeout: cfgRPCTimeoutSeconds * time.Second},
 		ClusterID:     clusterID,
