@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/spdk/spdk-csi/pkg/util"
+	"github.com/migrx-io/mgx-csi-driver/pkg/util"
 )
 
 func TestTryLockSequential(t *testing.T) {
