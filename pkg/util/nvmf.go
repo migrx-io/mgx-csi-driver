@@ -15,19 +15,19 @@ type NodeNVMf struct {
 
 // NewNVMf creates a new NVMf client
 func NewNVMf(config *ClusterConfig) *NodeNVMf {
+
 	client := RPCClient{
 		HTTPClient:    &http.Client{Timeout: cfgRPCTimeoutSeconds * time.Second},
-		ClusterID:     clusterID,
-		ClusterIP:     clusterIP,
-		ClusterSecret: clusterSecret,
+		Protocol:      config.Protocol,
+		Nodes:         config.Nodes,
+		Cluster:       config.Cluster,
+		Namespace:     config.Namespace,
+		Username:      config.Username,
+		Password:      config.Password,
 	}
 	return &NodeNVMf{
 		Client: &client,
 	}
-}
-
-func (node *NodeNVMf) Info() string {
-	return node.Client.info()
 }
 
 // VolumeInfo returns a string:string map containing information necessary
@@ -39,31 +39,6 @@ func (node *NodeNVMf) VolumeInfo(lvolID string) (map[string]string, error) {
 	}
 
 	return lvol, nil
-}
-
-// CreateLVolData is the data structure for creating a logical volume
-type CreateLVolData struct {
-	LvolName     string `json:"name"`
-	Size         string `json:"size"`
-	LvsName      string `json:"pool"`
-	Fabric       string `json:"fabric"`
-	Compression  bool   `json:"comp"`
-	Encryption   bool   `json:"crypto"`
-	MaxRWIOPS    string `json:"max_rw_iops"`
-	MaxRWmBytes  string `json:"max_rw_mbytes"`
-	MaxRmBytes   string `json:"max_r_mbytes"`
-	MaxWmBytes   string `json:"max_w_mbytes"`
-	MaxSize      string `json:"max_size"`
-	MaxNamespace int    `json:"max_namespace_per_subsys"`
-	DistNdcs     int    `json:"distr_ndcs"`
-	DistNpcs     int    `json:"distr_npcs"`
-	PriorClass   int    `json:"lvol_priority_class"`
-	CryptoKey1   string `json:"crypto_key1"`
-	CryptoKey2   string `json:"crypto_key2"`
-	HostID       string `json:"host_id"`
-	LvolID       string `json:"uid"`
-	ModelID      string `json:"namespace"`
-	PvcName      string `json:"pvc_name"`
 }
 
 // CreateVolume creates a logical volume and returns volume ID

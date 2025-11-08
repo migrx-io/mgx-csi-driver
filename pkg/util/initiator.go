@@ -46,11 +46,6 @@ type initiatorNVMf struct {
 	fastIOFailTmo  int
 }
 
-// clusterConfig represents the Kubernetes secret structure
-type ClusterConfig struct {
-	Nodes       []string `json:"nodes"`
-	APIKey      string   `json:"apiKey"`
-}
 
 func NewMGXClient(clusterID string) (*NodeNVMf, error) {
 	secretFile := FromEnv("MGX_SECRET", "/etc/csi-secret/secret.json")

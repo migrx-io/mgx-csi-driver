@@ -12,158 +12,213 @@ import (
 	"k8s.io/klog"
 )
 
-// errors deserve special care
-var (
-	ErrJSONNoSpaceLeft  = errors.New("json: No space left")
-	ErrJSONNoSuchDevice = errors.New("json: No such device")
-
-	// internal errors
-	ErrVolumeDeleted     = errors.New("volume deleted")
-	ErrVolumeUnpublished = errors.New("volume not published")
-)
-
-type SpdkNode interface {
-	Info() string
-	LvStores() ([]LvStore, error)
-	VolumeInfo(lvolID string) (map[string]string, error)
-	CreateVolume(lvolName, lvsName string, sizeMiB int64) (string, error)
-	GetVolume(lvolName, lvsName string) (string, error)
-	DeleteVolume(lvolID string) error
-	PublishVolume(lvolID string) error
-	UnpublishVolume(lvolID string) error
-	CreateSnapshot(lvolName, snapshotName string) (string, error)
-	DeleteSnapshot(snapshotID string) error
+// CreateLVolData is the data structure for creating a logical volume
+type CreateLVolData struct {
+	Name         string `json:"name"`
+	Size         int    `json:"size"`
+	Config       string `json:"config"`
+	Labels       string `json:"labels"`
+	CacheRCacheSize    int `json:"cache_r_cache_size"`
+	CacheRWCacheSize   int `json:"cache_rw_cache_size"`
+	QosRMbytesPerSec   int `json:"qos_r_mbytes_per_sec"`
+	QosWMbytesPerSec    int `json:"qos_w_mbytes_per_sec"`
+	QosRWIosPerSec      int `json:"qos_rw_ios_per_sec"`
+	StorageEncryptSecret 	string `json:"storage_encrypt_secret"`
+	StorageCompress 		int `json:"storage_compress"`
 }
-
 
 type LvolConnectResp struct {
 	Nqn            string `json:"nqn"`
-	ReconnectDelay int    `json:"reconnect-delay"`
-	NrIoQueues     int    `json:"nr-io-queues"`
-	CtrlLossTmo    int    `json:"ctrl-loss-tmo"`
 	Port           int    `json:"port"`
-	TargetType     string `json:"transport"`
 	IP             string `json:"ip"`
-	Connect        string `json:"connect"`
-	NSID           int    `json:"ns_id"`
 }
 
-type connectionInfo struct {
-	IP   string `json:"ip"`
-	Port int    `json:"port"`
-}
 
-// BDev SPDK block device
-type BDev struct {
-	Name     string `json:"lvol_name"`
-	UUID     string `json:"uuid"`
-	LvolSize int64  `json:"size"`
-}
-
-// RPCClient holds the connection information to the SimplyBlock Cluster
 type RPCClient struct {
-	ClusterID     string
-	ClusterIP     string
-	ClusterSecret string
+	Protocol      string
+	Nodes         []string
+	Cluster       string
+	Namespace     string
+	Username      string
+	Password      string
+	Token         string
 	HTTPClient    *http.Client
 }
 
-// CSIPoolsResp is the response of /pool/get_pools
-type CSIPoolsResp struct {
-	FreeClusters  int64  `json:"free_clusters"`
-	ClusterSize   int64  `json:"cluster_size"`
-	TotalClusters int64  `json:"total_data_clusters"`
-	Name          string `json:"name"`
-	UUID          string `json:"uuid"`
+// clusterConfig represents the Kubernetes secret structure
+type ClusterConfig struct {
+	Protocol      string   `json:"protocol"`
+	Nodes         []string `json:"nodes"`
+	Cluster       string   `json:"cluster"`
+	Namespace     string   `json:"ns"`
+	Username      string   `json:"username"`
+	Password      string   `json:"password"`
 }
 
-// SnapshotResp is the response of /snapshot
-type SnapshotResp struct {
-	Name         string `json:"snapshot_name"`
-	UUID         string `json:"uuid"`
-	Size         int64  `json:"size"`
-	PoolName     string `json:"pool_name"`
-	PoolID       string `json:"pool_uuid"`
-	CreatedAt    string `json:"created_at"`
-	SourceVolume struct {
-		UUID string `json:"id"`
-	} `json:"lvol"`
-}
 
-// CreateLVolData is the response for /lvol
-type CreateVolResp struct {
-	LVols []string `json:"lvols"`
-}
+func (client *RPCClient) Authenticate(host, username, password string) error {
 
-// ResizeVolReq is the request for /lvol/resize
-type ResizeVolReq struct {
-	LvolID  string `json:"lvol_id"`
-	NewSize int64  `json:"size"`
-}
+	authURL := fmt.Sprintf("%s://%s/api/v1/auth", client.Protocol, host)
 
-// Error represents SBCLI's common error response
-type Error struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
+	// Step 1: Build JSON payload
+	authData := map[string]string{
+		"cluster":  client.Cluster,
+		"ns":       client.Namespace,
+		"username": client.Username,
+		"password": client.Password,
+	}
 
-func (client *RPCClient) info() string {
-	return client.ClusterID
-}
-
-// lvStores returns all available logical volume stores
-func (client *RPCClient) lvStores() ([]LvStore, error) {
-	var result []CSIPoolsResp
-
-	out, err := client.CallSBCLI("GET", "/pool/get_pools", nil)
+	body, err := json.Marshal(authData)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("failed to marshal auth data: %w", err)
 	}
 
-	result, ok := out.([]CSIPoolsResp)
-	if !ok {
-		return nil, fmt.Errorf("failed to convert the response to CSIPoolsResp type. Interface: %v", out)
+	// Step 2: Send POST request
+	req, err := http.NewRequest("POST", authURL, bytes.NewBuffer(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	lvs := make([]LvStore, len(result))
-	for i := range result {
-		r := &result[i]
-		lvs[i].Name = r.Name
-		lvs[i].UUID = r.UUID
-		lvs[i].TotalSizeMiB = r.TotalClusters * r.ClusterSize / 1024 / 1024
-		lvs[i].FreeSizeMiB = r.FreeClusters * r.ClusterSize / 1024 / 1024
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Step 3: Check HTTP status code
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("auth failed: status=%d body=%s", resp.StatusCode, bodyBytes)
 	}
 
-	return lvs, nil
+	// Step 4: Parse JSON response
+	var respJSON map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&respJSON); err != nil {
+		return fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Step 5: Extract access_token
+	accessToken, ok := respJSON["access_token"].(string)
+	if !ok || accessToken == "" {
+		return fmt.Errorf("failed to extract access_token")
+	}
+
+	client.Token = fmt.Sprintf("JWT %s", accessToken)
+
+	return nil
 }
 
-// createVolume create a logical volume with simplyblock storage
-func (client *RPCClient) createVolume(params *CreateLVolData) (string, error) {
-	var lvolID string
-	klog.V(5).Info("params", params)
 
-	out, err := client.CallSBCLI("POST", "/lvol", &params)
+func (client *RPCClient) Call(plugin, op string, data map[string]interface{}) (interface{}, error) {
+
+	klog.Infof("Calling API: op: %s: plugin: %s: data: %s\n", op, plugin, string(data))
+
+  	// Build request body
+    req := map[string]interface{}{
+        "context": map[string]interface{}{
+            "op": op,
+        },
+        "data": data,
+    }
+
+	reqData, err = json.Marshal(req)
 	if err != nil {
-		if errorMatches(err, ErrJSONNoSpaceLeft) {
-			err = ErrJSONNoSpaceLeft // may happen in concurrency
+		return nil, fmt.Errorf("%s: %w", method, err)
+	}
+
+	// find avaliable node and call
+	for _, n := range client.Nodes {
+
+		if isReachable(n) {
+
+			klog.Infof("Calling API: node: %s\n", n)
+
+			// If there is no Token then request it
+			if client.Token == nil {
+				err: = client.Authenticate()
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			requestURL := fmt.Sprintf("%s://%s/api/v1/cluster/%s/plugins/%s", client.Protocol, client.Cluster, plugin)
+			req, err := http.NewRequest(method, requestURL, bytes.NewReader(data))
+			if err != nil {
+				return nil, fmt.Errorf("op: %s, plugin: %s, err:  %w", op, plugin,  err)
+			}
+
+			req.Header.Add("Authorization", client.Token)
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, err := client.HTTPClient.Do(req)
+			if err != nil {
+				return nil, fmt.Errorf("op: %s, plugin: %s, err:  %w", op, plugin,  err)
+			}
+
+			defer resp.Body.Close()
+
+
+			if resp.StatusCode != http.StatusOK {
+				return nil, fmt.Errorf("%v", resp.Body)
+			}
+
+			if resp.StatusCode == http.StatusOK {
+				// Ensure data is a map
+
+				m, ok := data.(map[string]interface{})
+				if !ok {
+					return nil, fmt.Errorf("unexpected response format")
+				}
+
+				// status == 200 -> check "error" field in JSON body
+				if errVal, exists := m["error"]; exists && errVal != nil {
+					return nil, fmt.Errorf("%v", errVal)
+				}
+
+				if val, exists := m["data"]; exists {
+					return val, nil
+				}
+			}
+
+			return nil, fmt.Errorf("unexpected response format")
+
+		} else {
+			klog.Infof("Calling API: node: %s\n", n)
+
 		}
+	}
+
+	return nil, fmt.Errorf("No nodes avaliable") 
+}
+
+
+
+func (client *RPCClient) createVolume(params *CreateLVolData) (string, error) {
+
+	klog.V(5).Info("createVolume", params)
+
+	_, err := client.Call("storage", "volume_create", &params)
+	if err != nil {
 		return "", err
 	}
 
-	lvolID, ok := out.(string)
-	if !ok {
-		return "", fmt.Errorf("failed to convert the response to string type. Interface: %v", out)
-	}
-	return lvolID, err
+	return params.Name, nil
 }
 
-// getVolume gets a volume and return a BDev,, lvsName/lvolName
-func (client *RPCClient) getVolume(lvolID string) (*BDev, error) {
-	var result []BDev
+func (client *RPCClient) getVolume(lvolID string) (*Vol, error) {
 
-	out, err := client.CallSBCLI("GET", "/lvol/"+lvolID, nil)
+	params := map[string]Interface{}{
+		Name: lvolID
+	}
+
+	klog.V(5).Info("getVolume", &params)
+
+	out, err := client.Call("storage", "volume_show", &params)
 	if err != nil {
-		if errorMatches(err, ErrJSONNoSuchDevice) {
 			err = ErrJSONNoSuchDevice
 		}
 		return nil, err
@@ -360,64 +415,17 @@ func (client *RPCClient) deleteSnapshot(snapshotID string) error {
 	return err
 }
 
-// CallSBCLI is a generic function to call the SimplyBlock API
-func (client *RPCClient) CallSBCLI(method, path string, args interface{}) (interface{}, error) {
-	data := []byte(`{}`)
-	var err error
 
-	if args != nil {
-		data, err = json.Marshal(args)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", method, err)
-		}
-	} else {
-		data = nil
-	}
-
-	requestURL := fmt.Sprintf("%s/api/v1/%s", client.ClusterIP, path)
-	klog.Infof("Calling Simplyblock API: Method: %s: RequestURL: %s: Body: %s\n", method, requestURL, string(data))
-	req, err := http.NewRequest(method, requestURL, bytes.NewReader(data))
+func isReachable(addr string) bool {
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", method, err)
+		return false
 	}
-
-	authHeader := fmt.Sprintf("%s %s", client.ClusterID, client.ClusterSecret)
-
-	req.Header.Add("Authorization", authHeader)
-	req.Header.Add("cluster", client.ClusterID)
-	req.Header.Add("secret", client.ClusterSecret)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", method, err)
-	}
-
-	defer resp.Body.Close()
-	if resp.StatusCode >= http.StatusInternalServerError {
-		return nil, fmt.Errorf("%s: HTTP error code: %d", method, resp.StatusCode)
-	}
-
-	var response struct {
-		Result  any    `json:"result"`
-		Results any    `json:"results"`
-		Error   string `json:"error"`
-	}
-
-	err = json.NewDecoder(resp.Body).Decode(&response)
-	if err != nil {
-		return nil, fmt.Errorf("%s: HTTP error code: %d Error: %w", method, resp.StatusCode, err)
-	}
-
-	if resp.StatusCode >= http.StatusBadRequest {
-		return nil, fmt.Errorf("%s: HTTP error code: %d Error: %s", method, resp.StatusCode, response.Error)
-	}
-
-	if response.Result != nil {
-		return response.Result, nil
-	}
-	return response.Results, nil
+	conn.Close()
+	return true
 }
+
+
 
 // errorMatches checks if the error message from the full error
 func errorMatches(errFull, errJSON error) bool {
