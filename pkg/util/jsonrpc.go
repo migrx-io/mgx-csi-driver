@@ -27,10 +27,15 @@ type CreateLVolData struct {
 	StorageCompress 		int `json:"storage_compress"`
 }
 
-type LvolConnectResp struct {
-	Nqn            string `json:"nqn"`
+
+type LvolResp struct {
+	Name           string `json:"nqn"`
+	Size           int    `json:"size"`
+	Nqn            string `json:"name"`
 	Port           int    `json:"port"`
 	IP             string `json:"ip"`
+	Status         string `json:"status"`
+	Error          string `json:"error"`
 }
 
 
@@ -196,7 +201,6 @@ func (client *RPCClient) Call(plugin, op string, data map[string]interface{}) (i
 }
 
 
-
 func (client *RPCClient) createVolume(params *CreateLVolData) (string, error) {
 
 	klog.V(5).Info("createVolume", params)
@@ -209,7 +213,15 @@ func (client *RPCClient) createVolume(params *CreateLVolData) (string, error) {
 	return params.Name, nil
 }
 
-func (client *RPCClient) getVolume(lvolID string) (*Vol, error) {
+func (client *RPCClient) publishVolume(lvolID string) error {
+
+	klog.V(5).Info("publishVolume", lvolID)
+
+	return nil
+}
+
+
+func (client *RPCClient) getVolume(lvolID string) (*LvolResp, error) {
 
 	params := map[string]Interface{}{
 		Name: lvolID
@@ -219,90 +231,20 @@ func (client *RPCClient) getVolume(lvolID string) (*Vol, error) {
 
 	out, err := client.Call("storage", "volume_show", &params)
 	if err != nil {
-			err = ErrJSONNoSuchDevice
-		}
 		return nil, err
 	}
-	b, err := json.Marshal(out)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal the response: %w", err)
+
+	var result *LvolResp
+	respBytes, _ := json.Marshal(out)
+
+	if err := json.Unmarshal(respBytes, &result); err != nil {
+		return nil, fmt.Errorf("invalid or empty response")
 	}
-	err = json.Unmarshal(b, &result)
-	if err != nil {
-		return nil, err
-	}
-	return &result[0], err
+
+	return result, nil
+
 }
 
-// listVolumes returns all volumes
-func (client *RPCClient) listVolumes() ([]*BDev, error) {
-	var results []*BDev
-
-	out, err := client.CallSBCLI("GET", "/lvol", nil)
-	if err != nil {
-		return nil, err
-	}
-	b, err := json.Marshal(out)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal the response: %w", err)
-	}
-	err = json.Unmarshal(b, &results)
-	if err != nil {
-		return nil, err
-	}
-	return results, nil
-}
-
-// getVolumeInfo gets a volume along with its connection info
-func (client *RPCClient) getVolumeInfo(lvolID string) (map[string]string, error) {
-	var result []*LvolConnectResp
-
-	out, err := client.CallSBCLI("GET", "/lvol/connect/"+lvolID, nil)
-	if err != nil {
-		klog.Error(err)
-		if errorMatches(err, ErrJSONNoSuchDevice) {
-			err = ErrJSONNoSuchDevice
-		}
-		return nil, err
-	}
-
-	byteData, err := json.Marshal(out)
-	if err != nil {
-		klog.Error(err)
-		return nil, err
-	}
-	err = json.Unmarshal(byteData, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	var connections []connectionInfo
-	for _, r := range result {
-		connections = append(connections, connectionInfo{IP: r.IP, Port: r.Port})
-	}
-
-	_, model := getLvolIDFromNQN(result[0].Nqn)
-	connectionsData, err := json.Marshal(connections)
-	if err != nil {
-		klog.Error(err)
-		return nil, err
-	}
-
-	return map[string]string{
-		"name":           lvolID,
-		"uuid":           lvolID,
-		"nqn":            result[0].Nqn,
-		"reconnectDelay": strconv.Itoa(result[0].ReconnectDelay),
-		"nrIoQueues":     strconv.Itoa(result[0].NrIoQueues),
-		"ctrlLossTmo":    strconv.Itoa(result[0].CtrlLossTmo),
-		"model":          model,
-		"targetType":     result[0].TargetType,
-		"connections":    string(connectionsData),
-		"nsId":           strconv.Itoa(result[0].NSID),
-	}, nil
-}
-
-// deleteVolume deletes a volume
 func (client *RPCClient) deleteVolume(lvolID string) error {
 	_, err := client.CallSBCLI("DELETE", "/lvol/"+lvolID, nil)
 	if errorMatches(err, ErrJSONNoSuchDevice) {

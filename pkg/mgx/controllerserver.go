@@ -271,9 +271,9 @@ func prepareCreateVolumeReq(ctx context.Context, req *csi.CreateVolumeRequest, s
 
 func (cs *controllerServer) getExistingVolume(name string, mgxClient *util.NodeNVMf, vol *csi.Volume) (*csi.Volume, error) {
 
-	volumeID, err := mgxClient.GetVolume(name)
+	volume, err := mgxClient.GetVolume(name)
 	if err == nil {
-		vol.VolumeId = fmt.Sprintf("%s", volumeID)
+		vol.VolumeId = volume.Name
 		klog.V(5).Info("volume already exists", vol.GetVolumeId())
 		return vol, nil
 	}

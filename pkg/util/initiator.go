@@ -234,14 +234,15 @@ func execWithTimeoutRetry(cmdLine []string, timeout, retry int) (err error) {
 }
 
 
-func fetchLvolConnection(mgxClient *NodeNVMf, lvolID string) ([]*LvolConnectResp, error) {
+func fetchLvolConnection(mgxClient *NodeNVMf, lvolID string) (*LvolResp, error) {
 
-	resp, err := mgxClient.Client.CallSBCLI("GET", "/lvol/connect/"+lvolID, nil)
+	volumeInfo, err := mgxClient.VolumeInfo(lvolID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch connection: %v", err)
 	}
-	var connection *LvolConnectResp
-	respBytes, _ := json.Marshal(resp)
+
+	var connection *LvolResp
+	respBytes, _ := json.Marshal(volumeInfo)
 
 	if err := json.Unmarshal(respBytes, &connection); err != nil {
 		return nil, fmt.Errorf("invalid or empty connection response")
