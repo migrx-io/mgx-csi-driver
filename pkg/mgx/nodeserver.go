@@ -28,8 +28,8 @@ import (
 
 type nodeServer struct {
 	*csicommon.DefaultNodeServer
-	mounter       mount.Interface
-	volumeLocks   *util.VolumeLocks
+	mounter     mount.Interface
+	volumeLocks *util.VolumeLocks
 }
 
 func newNodeServer(d *csicommon.CSIDriver) (*nodeServer, error) {
@@ -292,7 +292,6 @@ func (ns *nodeServer) publishVolume(stagingPath string, req *csi.NodePublishVolu
 	klog.Infof("mount %s to %s, fstype: %s, flags: %v", stagingPath, targetPath, fsType, mntFlags)
 	return ns.mounter.Mount(stagingPath, targetPath, fsType, mntFlags)
 }
-
 
 // unmount and delete mount point, must be idempotent
 func (ns *nodeServer) deleteMountPoint(path string) error {

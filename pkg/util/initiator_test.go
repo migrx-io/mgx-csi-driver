@@ -1,4 +1,3 @@
-
 // whitebox test of some functions in initiator.go
 package util
 

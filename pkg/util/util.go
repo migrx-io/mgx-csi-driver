@@ -159,7 +159,6 @@ func GetNvmeDeviceName(nvmeModel, bdf string) (string, error) {
 	return waitForDeviceReady(deviceGlob, 20)
 }
 
-
 // ConvertInterfaceToMap converts an interface to a map[string]string
 func ConvertInterfaceToMap(data interface{}) (map[string]string, error) {
 	dataMap, ok := data.(map[string]interface{})

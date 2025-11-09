@@ -1,7 +1,5 @@
 package util
 
-import "encoding/json"
-
 const (
 	cfgRPCTimeoutSeconds = 60
 )

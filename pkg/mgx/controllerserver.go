@@ -29,13 +29,12 @@ type controllerServer struct {
 }
 
 type mgxVolume struct {
-	lvolID    string
+	lvolID string
 }
 
 type mgxSnapshot struct {
-    snapshotID string
+	snapshotID string
 }
-
 
 // CreateVolume creates a new volume in the SimplyBlock storage system.
 func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
@@ -84,27 +83,15 @@ func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 	}
 
 	// no harm if volume already unpublished
-	err := cs.unpublishVolume(volumeID, mgxClient)
-	switch {
-	case errors.Is(err, util.ErrVolumeUnpublished):
-		// unpublished but not deleted in last request?
-		klog.Warningf("volume not published: %s", volumeID)
-	case errors.Is(err, util.ErrVolumeDeleted):
-		// deleted in previous request?
-		klog.Warningf("volume already deleted: %s", volumeID)
-	case err != nil:
-		klog.Errorf("failed to unpublish volume, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
+	err = cs.unpublishVolume(volumeID, mgxClient)
+	if err != nil {
+		return nil, err
 	}
 
 	// no harm if volume already deleted
 	err = cs.deleteVolume(volumeID, mgxClient)
-	if errors.Is(err, util.ErrJSONNoSuchDevice) {
-		// deleted in previous request?
-		klog.Warningf("volume not exists: %s", volumeID)
-	} else if err != nil {
-		klog.Errorf("failed to delete volume, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
+	if err != nil {
+		return nil, err
 	}
 
 	return &csi.DeleteVolumeResponse{}, nil
@@ -133,7 +120,7 @@ func (cs *controllerServer) ValidateVolumeCapabilities(_ context.Context, req *c
 
 func (cs *controllerServer) CreateSnapshot(_ context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
 
-	volumeID := req.GetSourcVolumeId()
+	volumeID := req.GetSourceVolumeId()
 	klog.Infof("CreateSnapshot : volumeID=%s", volumeID)
 
 	unlock := cs.volumeLocks.Lock(volumeID)
@@ -154,27 +141,22 @@ func (cs *controllerServer) CreateSnapshot(_ context.Context, req *csi.CreateSna
 	}
 
 	snapshotID, err := mgxClient.CreateSnapshot(mgxVol.lvolID, snapshotName)
-	klog.Infof("CreateSnapshot : snapshotID=%s", snapshotID)
+	klog.Infof("CreateSnapshot : snapshotID: %s", snapshotID)
 	if err != nil {
 		klog.Errorf("failed to create snapshot, volumeID: %s snapshotName: %s err: %v", volumeID, snapshotName, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	volSize, err := mgxClient.GetVolumeSize(mgxVol.lvolID)
-	klog.Infof("CreateSnapshot : volSize=%s", volSize)
+	klog.Infof("CreateSnapshot : volSize: %s", volSize)
 	if err != nil {
 		klog.Errorf("failed to get volume info, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	size, err := strconv.ParseInt(volSize, 10, 64)
-	if err != nil {
-		klog.Errorf("failed to parse volume size, size: %s err: %v", volSize, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	creationTime := timestamppb.Now()
 	snapshotData := csi.Snapshot{
-		SizeBytes:      size,
+		SizeBytes:      int64(volSize),
 		SnapshotId:     snapshotID,
 		SourceVolumeId: mgxVol.lvolID,
 		CreationTime:   creationTime,
@@ -228,17 +210,17 @@ func getIntParameter(params map[string]string, key string, defaultValue int) (in
 func prepareCreateVolumeReq(ctx context.Context, req *csi.CreateVolumeRequest, sizeMiB int64) (*util.CreateLVolData, error) {
 	params := req.GetParameters()
 
-  	// cache_r_cache_size: <cache_r_cache_size>
-  	// cache_rw_cache_size: <cache_rw_cache_size>
-  	// config: <config>
-  	// labels: <labels>
-  	// name: <name>
-  	// qos_r_mbytes_per_sec: <qos_r_mbytes_per_sec>
-  	// qos_rw_ios_per_sec: <qos_rw_ios_per_sec>
-  	// qos_w_mbytes_per_sec: <qos_w_mbytes_per_sec>
-  	// size: <size>
+	// cache_r_cache_size: <cache_r_cache_size>
+	// cache_rw_cache_size: <cache_rw_cache_size>
+	// config: <config>
+	// labels: <labels>
+	// name: <name>
+	// qos_r_mbytes_per_sec: <qos_r_mbytes_per_sec>
+	// qos_rw_ios_per_sec: <qos_rw_ios_per_sec>
+	// qos_w_mbytes_per_sec: <qos_w_mbytes_per_sec>
+	// size: <size>
 	// storage_compress: <storage_compress>
-  	// storage_encrypt_secret: <storage_encrypt_secret>
+	// storage_encrypt_secret: <storage_encrypt_secret>
 
 	//
 	// calculate cache size based on volume size request
@@ -254,17 +236,17 @@ func prepareCreateVolumeReq(ctx context.Context, req *csi.CreateVolumeRequest, s
 	}
 
 	createVolReq := util.CreateLVolData{
-		Name:     		  	 	req.GetName(),
-		Size:         	  	 	sizeMiB,
-		Config: 		  	 	params["config"],
-		Labels: 			 	params["labels"],
-		CacheRCacheSize:  	 	cache_r_cache_size,
-		CacheRWCacheSize: 	 	cache_rw_cache_size,
-		QosRMbytesPerSec:    	params["qos_r_mbytes_per_sec"],
-		QosWMbytesPerSec:    	params["qos_w_mbytes_per_sec"],
-		QosRWIosPerSec:      	params["qos_rw_ios_per_sec"],
-		StorageEncryptSecret: 	params["storage_encrypt_secret"],
-		StorageCompress: 		params["storage_compress"],
+		Name:                 req.GetName(),
+		Size:                 sizeMiB,
+		Config:               params["config"],
+		Labels:               params["labels"],
+		CacheRCacheSize:      cache_r_cache_size,
+		CacheRWCacheSize:     cache_rw_cache_size,
+		QosRMbytesPerSec:     params["qos_r_mbytes_per_sec"],
+		QosWMbytesPerSec:     params["qos_w_mbytes_per_sec"],
+		QosRWIosPerSec:       params["qos_rw_ios_per_sec"],
+		StorageEncryptSecret: params["storage_encrypt_secret"],
+		StorageCompress:      params["storage_compress"],
 	}
 	return &createVolReq, nil
 }
@@ -298,7 +280,7 @@ func (cs *controllerServer) createVolume(ctx context.Context, req *csi.CreateVol
 
 	klog.V(5).Info("provisioning volume from mgx..")
 
-	existingVolume, err := cs.getExistingVolume(req.GetName() mgxClient, &vol)
+	existingVolume, err := cs.getExistingVolume(req.GetName(), mgxClient, &vol)
 	if err == nil {
 		return existingVolume, nil
 	}
@@ -322,14 +304,14 @@ func (cs *controllerServer) createVolume(ctx context.Context, req *csi.CreateVol
 
 func getMGXVol(csiVolumeID string) (*mgxVolume, error) {
 	return &mgxVolume{
-		lvolID:	csiVolumeID,
+		lvolID: csiVolumeID,
 	}, nil
 }
 
 func getSnapshot(csiSnapshotID string) (*mgxSnapshot, error) {
-		return &mgxSnapshot{
-			snapshotID: csiSnapshotID,
-		}, nil
+	return &mgxSnapshot{
+		snapshotID: csiSnapshotID,
+	}, nil
 }
 
 func (cs *controllerServer) publishVolume(volumeID string, mgxClient *util.NodeNVMf) (map[string]string, error) {

@@ -5,27 +5,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"k8s.io/klog"
 )
 
 const (
-	
 	DevDiskByID = "/dev/disk/by-id/*%s*"
 
-	reconnectDelay  = 2
-	ctrlLossTmo     = 30
-	fastIOFailTmo   = 30
+	reconnectDelay = 2
+	ctrlLossTmo    = 30
+	fastIOFailTmo  = 30
 )
-
 
 // MGXCsiInitiator defines interface for NVMeoF initiator
 //   - Connect initiates target connection and returns local block device filename
@@ -46,29 +41,30 @@ type initiatorNVMf struct {
 	fastIOFailTmo  int
 }
 
-
-func NewMGXClient(clusterID string) (*NodeNVMf, error) {
+func NewMGXClient() (*NodeNVMf, error) {
 	secretFile := FromEnv("MGX_SECRET", "/etc/csi-secret/secret.json")
+
 	var clusterConfig ClusterConfig
-	err := ParseJSONFile(secretFile, &cluster)
+
+	err := ParseJSONFile(secretFile, &clusterConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse secret file: %w", err)
 	}
 
-	if clusterConfig == nil {
-		return nil, fmt.Errorf("failed to find secret for clusterID %s", clusterID)
+	if &clusterConfig == nil {
+		return nil, fmt.Errorf("failed to find secret")
 	}
 
-	if len(clusterConfig.Nodes) == 0 || clusterConfig.APIKey == "" {
+	if len(clusterConfig.Nodes) == 0 || clusterConfig.Username == "" {
 		return nil, fmt.Errorf("invalid cluster configuration")
 	}
 
 	// Log and return the newly created Simplyblock client.
 	klog.Infof("MGX client created for Nodes:%s",
-		clusterConfig.Nodes
+		clusterConfig.Nodes,
 	)
 
-	return NewNVMf(clusterConfig), nil
+	return NewNVMf(&clusterConfig), nil
 }
 
 func NewMGXCsiInitiator(volumeContext map[string]string) (MGXCsiInitiator, error) {
@@ -76,15 +72,14 @@ func NewMGXCsiInitiator(volumeContext map[string]string) (MGXCsiInitiator, error
 	klog.Infof("mgx nqn :%s", volumeContext["nqn"])
 
 	return &initiatorNVMf{
-		name:           volumeContext["name"]
-		nqn:			volumeContext["nqn"],
+		name:           volumeContext["name"],
+		nqn:            volumeContext["nqn"],
 		reconnectDelay: reconnectDelay,
 		ctrlLossTmo:    ctrlLossTmo,
 		fastIOFailTmo:  fastIOFailTmo,
 	}, nil
 
 }
-
 
 func (nvmf *initiatorNVMf) Connect() (string, error) {
 
@@ -112,15 +107,15 @@ func (nvmf *initiatorNVMf) Connect() (string, error) {
 
 		cmdLine := []string{
 			"nvme", "connect", "-t", "tcp",
-			"-a", connection.IP, 
-			"-s", strconv.Itoa(connection.Port), 
-			"-n", nvmf.nqn, 
-			"--ctrl-loss-tmo=", nvmf.ctrlLossTmo,
-			"--reconnect-delay=", nvmf.reconnectDelay, 
-			"--fast_io_fail_tmo", nvmf.fastIOFailTmo,
-			}
+			"-a", connection.IP,
+			"-s", strconv.Itoa(connection.Port),
+			"-n", nvmf.nqn,
+			"--ctrl-loss-tmo=" + strconv.Itoa(nvmf.ctrlLossTmo),
+			"--reconnect-delay=" + strconv.Itoa(nvmf.reconnectDelay),
+			"--fast_io_fail_tmo=" + strconv.Itoa(nvmf.fastIOFailTmo),
+		}
 
-		err := execWithTimeoutRetry(cmdLine, 30, 1)
+		err = execWithTimeoutRetry(cmdLine, 30, 1)
 		if err != nil {
 			// go on checking device status in case caused by duplicated request
 			klog.Errorf("command %v failed: %s", cmdLine, err)
@@ -137,19 +132,18 @@ func (nvmf *initiatorNVMf) Connect() (string, error) {
 	return devicePath, nil
 }
 
+func (nvmf *initiatorNVMf) Disconnect() error {
+	// nvme disconnect -n "nqn"
+	cmdLine := []string{"nvme", "disconnect", "-n", nvmf.nqn}
+	err := execWithTimeout(cmdLine, 40)
+	if err != nil {
+		// go on checking device status in case caused by duplicate request
+		klog.Errorf("command %v failed: %s", cmdLine, err)
+	}
 
-func (nvmf *initiatorNVMf) Disconnect() error {                                    
-    // nvme disconnect -n "nqn"                                                    
-    cmdLine := []string{"nvme", "disconnect", "-n", nvmf.nqn}                      
-    err := execWithTimeout(cmdLine, 40)                                            
-    if err != nil {                                                                
-        // go on checking device status in case caused by duplicate request        
-        klog.Errorf("command %v failed: %s", cmdLine, err)                         
-    }                                                                              
-                                                                                   
-    deviceGlob := fmt.Sprintf("/dev/disk/by-id/*%s*", nvmf.model)                  
-    return waitForDeviceGone(deviceGlob)                                           
-}   
+	deviceGlob := fmt.Sprintf("/dev/disk/by-id/*%s*", nvmf.name)
+	return waitForDeviceGone(deviceGlob)
+}
 
 // when timeout is set as 0, try to find the device file immediately
 // otherwise, wait for device file comes up or timeout
@@ -221,7 +215,6 @@ func isNqnConnected(nqn string) (bool, error) {
 	return false, nil
 }
 
-
 func execWithTimeoutRetry(cmdLine []string, timeout, retry int) (err error) {
 	for retry > 0 {
 		err = execWithTimeout(cmdLine, timeout)
@@ -233,10 +226,9 @@ func execWithTimeoutRetry(cmdLine []string, timeout, retry int) (err error) {
 	return err
 }
 
-
 func fetchLvolConnection(mgxClient *NodeNVMf, lvolID string) (*LvolResp, error) {
 
-	volumeInfo, err := mgxClient.VolumeInfo(lvolID)
+	volumeInfo, err := mgxClient.GetVolume(lvolID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch connection: %v", err)
 	}

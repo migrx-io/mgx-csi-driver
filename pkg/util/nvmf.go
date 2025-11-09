@@ -1,9 +1,7 @@
 package util
 
 import (
-	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"k8s.io/klog"
@@ -17,13 +15,13 @@ type NodeNVMf struct {
 func NewNVMf(config *ClusterConfig) *NodeNVMf {
 
 	client := RPCClient{
-		HTTPClient:    &http.Client{Timeout: cfgRPCTimeoutSeconds * time.Second},
-		Protocol:      config.Protocol,
-		Nodes:         config.Nodes,
-		Cluster:       config.Cluster,
-		Namespace:     config.Namespace,
-		Username:      config.Username,
-		Password:      config.Password,
+		HTTPClient: &http.Client{Timeout: cfgRPCTimeoutSeconds * time.Second},
+		Protocol:   config.Protocol,
+		Nodes:      config.Nodes,
+		Cluster:    config.Cluster,
+		Namespace:  config.Namespace,
+		Username:   config.Username,
+		Password:   config.Password,
 	}
 	return &NodeNVMf{
 		Client: &client,
@@ -48,7 +46,7 @@ func (node *NodeNVMf) PublishVolume(lvolID string) error {
 	return nil
 }
 
-func (node *NodeNVMf) GetVolume(lvolID string) (map[string]string, error) {
+func (node *NodeNVMf) GetVolume(lvolID string) (*LvolResp, error) {
 	lvol, err := node.Client.getVolume(lvolID)
 	if err != nil {
 		return nil, err
@@ -56,10 +54,10 @@ func (node *NodeNVMf) GetVolume(lvolID string) (map[string]string, error) {
 	return lvol, nil
 }
 
-func (node *NodeNVMf) GetVolumeSize(lvolID string) (string, error) {
+func (node *NodeNVMf) GetVolumeSize(lvolID string) (int, error) {
 	lvol, err := node.Client.getVolume(lvolID)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	return lvol.Size, err
 }
@@ -73,40 +71,24 @@ func (node *NodeNVMf) DeleteVolume(lvolID string) error {
 	return nil
 }
 
-
-// ResizeVolume resizes a volume
 func (node *NodeNVMf) ResizeVolume(lvolID string, newSize int64) (bool, error) {
 	return node.Client.resizeVolume(lvolID, newSize)
 }
 
-// ListSnapshots returns a list of snapshots
 func (node *NodeNVMf) ListSnapshots() ([]*SnapshotResp, error) {
 	return node.Client.listSnapshots()
 }
 
-// CloneSnapshot clones a snapshot to a new volume
-func (node *NodeNVMf) CloneSnapshot(snapshotID, cloneName, newSize, pvcName string) (string, error) {
-	lvolID, err := node.Client.cloneSnapshot(snapshotID, cloneName, newSize, pvcName)
-	if err != nil {
-		return "", err
-	}
-	klog.V(5).Infof("snapshot cloned: %s", lvolID)
-	return lvolID, nil
-}
-
 // CreateSnapshot creates a snapshot of a volume
 func (node *NodeNVMf) CreateSnapshot(lvolID, snapshotName string) (string, error) {
-	snapshotID, err := node.Client.snapshot(lvolID, snapshotName)
+	snapshotID, err := node.Client.createSnapshot(lvolID, snapshotName)
 	if err != nil {
 		return "", err
 	}
-	snapshotID = fmt.Sprintf("%s:%s", node.Client.ClusterID, snapshotID)
 	klog.V(5).Infof("snapshot created: %s", snapshotID)
 	return snapshotID, nil
 }
 
-
-// DeleteSnapshot deletes a snapshot
 func (node *NodeNVMf) DeleteSnapshot(snapshotID string) error {
 	err := node.Client.deleteSnapshot(snapshotID)
 	if err != nil {
@@ -116,10 +98,9 @@ func (node *NodeNVMf) DeleteSnapshot(snapshotID string) error {
 	return nil
 }
 
-
-// UnpublishVolume unexports a volume through NVMf target
 func (node *NodeNVMf) UnpublishVolume(lvolID string) error {
-	_, err := node.Client.CallSBCLI("GET", "/lvol/"+lvolID, nil)
+
+	err := node.Client.unpublishVolume(lvolID)
 	if err != nil {
 		return err
 	}

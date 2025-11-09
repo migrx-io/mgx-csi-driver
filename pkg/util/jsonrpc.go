@@ -3,63 +3,70 @@ package util
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
-	"strings"
-
+	"net"
+	"time"
+	"io"
 	"k8s.io/klog"
 )
 
 // CreateLVolData is the data structure for creating a logical volume
 type CreateLVolData struct {
-	Name         string `json:"name"`
-	Size         int    `json:"size"`
-	Config       string `json:"config"`
-	Labels       string `json:"labels"`
-	CacheRCacheSize    int `json:"cache_r_cache_size"`
-	CacheRWCacheSize   int `json:"cache_rw_cache_size"`
-	QosRMbytesPerSec   int `json:"qos_r_mbytes_per_sec"`
-	QosWMbytesPerSec    int `json:"qos_w_mbytes_per_sec"`
-	QosRWIosPerSec      int `json:"qos_rw_ios_per_sec"`
-	StorageEncryptSecret 	string `json:"storage_encrypt_secret"`
-	StorageCompress 		int `json:"storage_compress"`
+	Name                 string `json:"name"`
+	Size                 int64  `json:"size"`
+	Config               string `json:"config"`
+	Labels               string `json:"labels"`
+	CacheRCacheSize      int    `json:"cache_r_cache_size"`
+	CacheRWCacheSize     int    `json:"cache_rw_cache_size"`
+	QosRMbytesPerSec     int    `json:"qos_r_mbytes_per_sec"`
+	QosWMbytesPerSec     int    `json:"qos_w_mbytes_per_sec"`
+	QosRWIosPerSec       int    `json:"qos_rw_ios_per_sec"`
+	StorageEncryptSecret string `json:"storage_encrypt_secret"`
+	StorageCompress      int    `json:"storage_compress"`
 }
-
 
 type LvolResp struct {
-	Name           string `json:"nqn"`
-	Size           int    `json:"size"`
-	Nqn            string `json:"name"`
-	Port           int    `json:"port"`
-	IP             string `json:"ip"`
-	Status         string `json:"status"`
-	Error          string `json:"error"`
+	Name   string `json:"nqn"`
+	Size   int    `json:"size"`
+	Nqn    string `json:"name"`
+	Port   int    `json:"port"`
+	IP     string `json:"ip"`
+	Status string `json:"status"`
+	Error  string `json:"error"`
 }
 
+type SnapshotResp struct {
+	Name         string `json:"name"`
+	UUID         string `json:"uuid"`
+	Size         int64  `json:"size"`
+	Pool         string `json:"pool"`
+	CreatedAt    string `json:"created_at"`
+	SourceVolume struct {
+		UUID string `json:"id"`
+	} `json:"lvol"`
+}
 
 type RPCClient struct {
-	Protocol      string
-	Nodes         []string
-	Cluster       string
-	Namespace     string
-	Username      string
-	Password      string
-	Token         string
-	HTTPClient    *http.Client
+	Protocol   string
+	Nodes      []string
+	Cluster    string
+	Namespace  string
+	Username   string
+	Password   string
+	Token      string
+	HTTPClient *http.Client
 }
 
 // clusterConfig represents the Kubernetes secret structure
 type ClusterConfig struct {
-	Protocol      string   `json:"protocol"`
-	Nodes         []string `json:"nodes"`
-	Cluster       string   `json:"cluster"`
-	Namespace     string   `json:"ns"`
-	Username      string   `json:"username"`
-	Password      string   `json:"password"`
+	Protocol  string   `json:"protocol"`
+	Nodes     []string `json:"nodes"`
+	Cluster   string   `json:"cluster"`
+	Namespace string   `json:"ns"`
+	Username  string   `json:"username"`
+	Password  string   `json:"password"`
 }
-
 
 func (client *RPCClient) Authenticate(host, username, password string) error {
 
@@ -87,8 +94,8 @@ func (client *RPCClient) Authenticate(host, username, password string) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	c := &http.Client{}
+	resp, err := c.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
@@ -117,22 +124,21 @@ func (client *RPCClient) Authenticate(host, username, password string) error {
 	return nil
 }
 
+func (client *RPCClient) Call(plugin, op string, data interface{}) (interface{}, error) {
 
-func (client *RPCClient) Call(plugin, op string, data map[string]interface{}) (interface{}, error) {
+	klog.Infof("Calling API: op: %s: plugin: %s: data: %v\n", op, plugin, data)
 
-	klog.Infof("Calling API: op: %s: plugin: %s: data: %s\n", op, plugin, string(data))
+	// Build request body
+	req := map[string]interface{}{
+		"context": map[string]interface{}{
+			"op": op,
+		},
+		"data": data,
+	}
 
-  	// Build request body
-    req := map[string]interface{}{
-        "context": map[string]interface{}{
-            "op": op,
-        },
-        "data": data,
-    }
-
-	reqData, err = json.Marshal(req)
+	reqData, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", method, err)
+		return nil, err
 	}
 
 	// find avaliable node and call
@@ -143,17 +149,17 @@ func (client *RPCClient) Call(plugin, op string, data map[string]interface{}) (i
 			klog.Infof("Calling API: node: %s\n", n)
 
 			// If there is no Token then request it
-			if client.Token == nil {
-				err: = client.Authenticate()
+			if client.Token == "" {
+				err = client.Authenticate(n, client.Username, client.Password)
 				if err != nil {
 					return nil, err
 				}
 			}
 
 			requestURL := fmt.Sprintf("%s://%s/api/v1/cluster/%s/plugins/%s", client.Protocol, client.Cluster, plugin)
-			req, err := http.NewRequest(method, requestURL, bytes.NewReader(data))
+			req, err := http.NewRequest("POST", requestURL, bytes.NewReader(reqData))
 			if err != nil {
-				return nil, fmt.Errorf("op: %s, plugin: %s, err:  %w", op, plugin,  err)
+				return nil, fmt.Errorf("op: %s, plugin: %s, err:  %w", op, plugin, err)
 			}
 
 			req.Header.Add("Authorization", client.Token)
@@ -161,7 +167,7 @@ func (client *RPCClient) Call(plugin, op string, data map[string]interface{}) (i
 
 			resp, err := client.HTTPClient.Do(req)
 			if err != nil {
-				return nil, fmt.Errorf("op: %s, plugin: %s, err:  %w", op, plugin,  err)
+				return nil, fmt.Errorf("op: %s, plugin: %s, err:  %w", op, plugin, err)
 			}
 
 			defer resp.Body.Close()
@@ -174,9 +180,11 @@ func (client *RPCClient) Call(plugin, op string, data map[string]interface{}) (i
 			if resp.StatusCode == http.StatusOK {
 				// Ensure data is a map
 
-				m, ok := data.(map[string]interface{})
-				if !ok {
-					return nil, fmt.Errorf("unexpected response format")
+				body, _ := io.ReadAll(resp.Body)
+				var m map[string]interface{}
+
+				if err := json.Unmarshal(body, &m); err != nil {
+					return nil, fmt.Errorf("unmarshal: %w", err)
 				}
 
 				// status == 200 -> check "error" field in JSON body
@@ -197,15 +205,14 @@ func (client *RPCClient) Call(plugin, op string, data map[string]interface{}) (i
 		}
 	}
 
-	return nil, fmt.Errorf("No nodes avaliable") 
+	return nil, fmt.Errorf("No nodes avaliable")
 }
-
 
 func (client *RPCClient) createVolume(params *CreateLVolData) (string, error) {
 
 	klog.V(5).Info("createVolume", params)
 
-	_, err := client.Call("storage", "volume_create", &params)
+	_, err := client.Call("storage", "volume_create", params)
 	if err != nil {
 		return "", err
 	}
@@ -220,11 +227,10 @@ func (client *RPCClient) publishVolume(lvolID string) error {
 	return nil
 }
 
-
 func (client *RPCClient) getVolume(lvolID string) (*LvolResp, error) {
 
-	params := map[string]Interface{}{
-		Name: lvolID
+	params := map[string]interface{}{
+		"name": lvolID,
 	}
 
 	klog.V(5).Info("getVolume", &params)
@@ -246,117 +252,59 @@ func (client *RPCClient) getVolume(lvolID string) (*LvolResp, error) {
 }
 
 func (client *RPCClient) deleteVolume(lvolID string) error {
-	_, err := client.CallSBCLI("DELETE", "/lvol/"+lvolID, nil)
-	if errorMatches(err, ErrJSONNoSuchDevice) {
-		err = ErrJSONNoSuchDevice // may happen in concurrency
+
+	params := map[string]interface{}{
+		"name": lvolID,
+	}
+
+	klog.V(5).Info("deleteVolume", &params)
+
+	_, err := client.Call("storage", "volume_del", &params)
+	if err != nil {
+		return err
 	}
 
 	return err
 }
 
-// resizeVolume resizes a volume
 func (client *RPCClient) resizeVolume(lvolID string, size int64) (bool, error) {
-	params := ResizeVolReq{
-		LvolID:  lvolID,
-		NewSize: size,
-	}
-	var result bool
-	out, err := client.CallSBCLI("PUT", "/lvol/resize/"+lvolID, &params)
-	if err != nil {
-		return false, err
-	}
-	result, ok := out.(bool)
-	if !ok {
-		return false, fmt.Errorf("failed to convert the response to bool type. Interface: %v", out)
-	}
-	return result, nil
+
+	klog.V(5).Info("resizeVolume", lvolID)
+
+	return false, nil
+
 }
 
-// cloneSnapshot clones a snapshot
-func (client *RPCClient) cloneSnapshot(snapshotID, cloneName, newSize, pvcName string) (string, error) {
-	params := struct {
-		SnapshotID string `json:"snapshot_id"`
-		CloneName  string `json:"clone_name"`
-		PVCName    string `json:"pvc_name,omitempty"`
-	}{
-		SnapshotID: snapshotID,
-		CloneName:  cloneName,
-		PVCName:    pvcName,
-	}
-
-	klog.V(5).Infof("cloned volume size: %s", newSize)
-
-	var lvolID string
-	out, err := client.CallSBCLI("POST", "/snapshot/clone", &params)
-	if err != nil {
-		if errorMatches(err, ErrJSONNoSpaceLeft) {
-			err = ErrJSONNoSpaceLeft // may happen in concurrency
-		}
-		return "", err
-	}
-
-	lvolID, ok := out.(string)
-	if !ok {
-		return "", fmt.Errorf("failed to convert the response to string type. Interface: %v", out)
-	}
-	return lvolID, err
-}
-
-// listSnapshots returns all snapshots
 func (client *RPCClient) listSnapshots() ([]*SnapshotResp, error) {
+
 	var results []*SnapshotResp
 
-	out, err := client.CallSBCLI("GET", "/snapshot", nil)
-	if err != nil {
-		return nil, err
-	}
-	b, err := json.Marshal(out)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal the response: %w", err)
-	}
-	err = json.Unmarshal(b, &results)
-	if err != nil {
-		return nil, err
-	}
+	klog.V(5).Info("listSnapshots")
+
 	return results, nil
 }
 
-// snapshot creates a snapshot
-func (client *RPCClient) snapshot(lvolID, snapShotName string) (string, error) {
-	params := struct {
-		LvolName     string `json:"lvol_id"`
-		SnapShotName string `json:"snapshot_name"`
-	}{
-		LvolName:     lvolID,
-		SnapShotName: snapShotName,
-	}
+func (client *RPCClient) createSnapshot(lvolID, snapShotName string) (string, error) {
 	var snapshotID string
-	out, err := client.CallSBCLI("POST", "/snapshot", &params)
-	if err != nil {
-		if errorMatches(err, ErrJSONNoSpaceLeft) {
-			err = ErrJSONNoSpaceLeft // may happen in concurrency
-		}
-		return "", err
-	}
 
-	snapshotID, ok := out.(string)
-	if !ok {
-		return "", fmt.Errorf("failed to convert the response to string type. Interface: %v", out)
-	}
-	return snapshotID, err
+	klog.V(5).Info("createSnapshot", lvolID, snapShotName)
+
+	return snapshotID, nil
 }
 
-// deleteSnapshot deletes a snapshot
 func (client *RPCClient) deleteSnapshot(snapshotID string) error {
-	_, err := client.CallSBCLI("DELETE", "/snapshot/"+snapshotID, nil)
 
-	if errorMatches(err, ErrJSONNoSuchDevice) {
-		err = ErrJSONNoSuchDevice // may happen in concurrency
-	}
+	klog.V(5).Info("deleteSnapshot", snapshotID)
 
-	return err
+	return nil
 }
 
+func (client *RPCClient) unpublishVolume(lvolID string) error {
+
+	klog.V(5).Info("unpublishVolume", lvolID)
+
+	return nil
+}
 
 func isReachable(addr string) bool {
 	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
@@ -365,18 +313,4 @@ func isReachable(addr string) bool {
 	}
 	conn.Close()
 	return true
-}
-
-
-
-// errorMatches checks if the error message from the full error
-func errorMatches(errFull, errJSON error) bool {
-	if errFull == nil {
-		return false
-	}
-	strFull := strings.ToLower(errFull.Error())
-	strJSON := strings.ToLower(errJSON.Error())
-	strJSON = strings.TrimPrefix(strJSON, "json:")
-	strJSON = strings.TrimSpace(strJSON)
-	return strings.Contains(strFull, strJSON)
 }
