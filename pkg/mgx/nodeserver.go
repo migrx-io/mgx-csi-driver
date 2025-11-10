@@ -17,17 +17,16 @@ import (
 )
 
 type nodeServer struct {
-	csi.UnimplementedNodeServer
-	driver      *csicommon.CSIDriver
+	*csicommon.DefaultNodeServer
 	mounter     mount.Interface
 	volumeLocks *util.VolumeLocks
 }
 
 func newNodeServer(d *csicommon.CSIDriver) *nodeServer {
 	ns := &nodeServer{
-		driver:      d,
-		mounter:     mount.New(""),
-		volumeLocks: util.NewVolumeLocks(),
+		DefaultNodeServer: csicommon.NewDefaultNodeServer(d),
+		mounter:           mount.New(""),
+		volumeLocks:       util.NewVolumeLocks(),
 	}
 
 	return ns
@@ -35,7 +34,7 @@ func newNodeServer(d *csicommon.CSIDriver) *nodeServer {
 
 func (ns *nodeServer) NodeGetInfo(_ context.Context, _ *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
 	response := &csi.NodeGetInfoResponse{
-		NodeId: ns.driver.GetNodeID(),
+		NodeId: ns.Driver.GetNodeID(),
 	}
 
 	return response, nil

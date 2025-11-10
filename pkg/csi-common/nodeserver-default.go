@@ -27,6 +27,7 @@ import (
 )
 
 type DefaultNodeServer struct {
+	csi.UnimplementedNodeServer
 	Driver *CSIDriver
 }
 
