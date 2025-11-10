@@ -38,7 +38,11 @@ endif
 CSI_IMAGE := $(CSI_IMAGE_REGISTRY)/mgx-csi-driver:$(CSI_IMAGE_TAG)
 
 # default target
-all: build lint test
+all: fmt build lint test
+
+.PHONY: fmt
+fmt:
+	@go fmt ./...
 
 # build binary
 .PHONY: build
@@ -57,6 +61,7 @@ docker-buildx:
 # static code check, text lint
 # lint: golangci yamllint shellcheck mdl codespell
 lint: golangci
+
 
 .PHONY: golangci
 golangci: $(GOLANGCI_BIN)

@@ -27,11 +27,11 @@ import (
 )
 
 type DefaultControllerServer struct {
+	csi.UnimplementedControllerServer
 	Driver *CSIDriver
 }
 
-func (cs *DefaultControllerServer) CreateVolume(
-	ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
+func (cs *DefaultControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "")
 }
 

@@ -16,8 +16,7 @@ import (
 )
 
 type controllerServer struct {
-	csi.UnimplementedControllerServer
-	driver      *csicommon.CSIDriver
+	*csicommon.DefaultControllerServer
 	volumeLocks *util.VolumeLocks
 }
 
@@ -94,7 +93,7 @@ func (cs *controllerServer) ValidateVolumeCapabilities(_ context.Context, req *c
 	// make sure we support all requested caps
 	for _, cap := range req.GetVolumeCapabilities() {
 		supported := false
-		for _, accessMode := range cs.driver.GetVolumeCapabilityAccessModes() {
+		for _, accessMode := range cs.Driver.GetVolumeCapabilityAccessModes() {
 			if cap.GetAccessMode().GetMode() == accessMode.GetMode() {
 				supported = true
 				break
@@ -414,9 +413,8 @@ func (cs *controllerServer) ControllerGetVolume(_ context.Context, req *csi.Cont
 
 func newControllerServer(d *csicommon.CSIDriver) *controllerServer {
 	server := controllerServer{
-		UnimplementedControllerServer: csi.UnimplementedControllerServer{},
-		driver:                        d,
-		volumeLocks:                   util.NewVolumeLocks(),
+		DefaultControllerServer: csicommon.NewDefaultControllerServer(d),
+		volumeLocks:             util.NewVolumeLocks(),
 	}
 	return &server
 }
