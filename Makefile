@@ -109,12 +109,12 @@ helm-install:
 .PHONY: helm-uninstall
 helm-uninstall:
 	@echo === uninstall helm
-	@helm uninstall mgx-csi-driver -n mgx-csi-driver
+	@helm uninstall mgx-csi-driver -n mgx-csi-driver || true
 
 .PHONY: kind-load
-kind-load: helm-uninstall docker-build
+kind-load: docker-build
 	@echo === load to kind
-	@kind load docker-image mgx-csi-driver:latest --name $(KIND_CLUSTER_NAME)
+	@$(TOOL_DIR)/kind load docker-image $(CSI_IMAGE_REGISTRY)/mgx-csi-driver:latest --name $(KIND_CLUSTER_NAME)
 
 # e2e test
 .PHONY: e2e-test

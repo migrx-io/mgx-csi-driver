@@ -10,13 +10,17 @@ import (
 
 type identityServer struct {
 	csi.UnimplementedIdentityServer
-	driver *csicommon.CSIDriver
+	driver  *csicommon.CSIDriver
+	name    string
+	version string
 }
 
-func newIdentityServer(d *csicommon.CSIDriver) *identityServer {
+func newIdentityServer(d *csicommon.CSIDriver, name, version string) *identityServer {
 	return &identityServer{
 		UnimplementedIdentityServer: csi.UnimplementedIdentityServer{},
 		driver:                      d,
+		name:                        name,
+		version:                     version,
 	}
 }
 
@@ -38,4 +42,11 @@ func (*identityServer) Probe(context.Context, *csi.ProbeRequest) (*csi.ProbeResp
 	// You can add readiness checks here if needed.
 	// For now, return OK to satisfy sidecars
 	return &csi.ProbeResponse{}, nil
+}
+
+func (ids *identityServer) GetPluginInfo(context.Context, *csi.GetPluginInfoRequest) (*csi.GetPluginInfoResponse, error) {
+	return &csi.GetPluginInfoResponse{
+		Name:          ids.name,
+		VendorVersion: ids.version,
+	}, nil
 }
