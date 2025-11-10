@@ -19,6 +19,8 @@ GOLANGCI_VERSION := v2.6.0
 GOLANGCI_BIN := $(TOOL_DIR)/golangci-lint
 KIND_VERSION ?= v0.26.0
 KIND_CLUSTER_NAME ?= mgx-cluster
+MGM_API_USERNAME := admin
+MGM_API_PASSWD := admin123
 
 # go source, scripts
 SOURCE_DIRS := cmd pkg
@@ -109,7 +111,7 @@ unit-test:
 .PHONY: helm-install
 helm-install: helm-uninstall
 	@echo === install helm
-	@helm install mgx-csi-driver ./charts/mgx-csi-driver --namespace mgx-csi-driver --create-namespace --set csiSecret.clusterConfig.username=admin --set csiSecret.clusterConfig.password=admin123 --set csiSecret.clusterConfig.nodes={"host.docker.internal:8082"}
+	@helm install mgx-csi-driver ./charts/mgx-csi-driver --namespace mgx-csi-driver --create-namespace --set csiSecret.clusterConfig.username=$(MGM_API_USERNAME) --set csiSecret.clusterConfig.password=$(MGM_API_PASSWD) --set csiSecret.clusterConfig.nodes={"host.docker.internal:8082"}
 
 .PHONY: helm-uninstall
 helm-uninstall:
