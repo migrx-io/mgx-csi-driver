@@ -1,4 +1,4 @@
-FROM golang:1.24.10-alpine as builder
+FROM golang:1.24.10-alpine AS builder
 LABEL stage=mgxbuilder
 
 RUN apk add --no-cache alpine-sdk
