@@ -17,6 +17,9 @@ TOOL_DIR := $(OUT_DIR)/tool
 # use golangci-lint for static code check
 GOLANGCI_VERSION := v2.6.0
 GOLANGCI_BIN := $(TOOL_DIR)/golangci-lint
+KIND_VERSION ?= v0.26.0
+KIND_CLUSTER_NAME ?= mgx-cluster
+
 # go source, scripts
 SOURCE_DIRS := cmd pkg
 
@@ -63,6 +66,20 @@ golangci: $(GOLANGCI_BIN)
 $(GOLANGCI_BIN):
 	@echo === installing golangci-lint
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(TOOL_DIR) $(GOLANGCI_VERSION)
+
+
+.PHONY: kind-create-cluster
+kind-create-cluster: install-kind
+	@echo "Creating Kind cluster '$(KIND_CLUSTER_NAME)' with 3 worker nodes..."
+	@$(TOOL_DIR)/kind create cluster --name $(KIND_CLUSTER_NAME) --config ./e2e/kind-config.yaml
+	@echo "Kind cluster '$(KIND_CLUSTER_NAME)' created successfully"
+
+
+.PHONY: install-kind
+install-kind:
+	@echo "Installing Kind version $(KIND_VERSION)..."
+	@curl -Lo $(TOOL_DIR)/kind https://kind.sigs.k8s.io/dl/$(KIND_VERSION)/kind-$(shell uname)-$(shell uname -m)
+	@chmod +x $(TOOL_DIR)/kind
 
 # tests
 test: mod-check unit-test
