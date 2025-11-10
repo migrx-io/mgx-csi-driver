@@ -107,7 +107,7 @@ unit-test:
 	@go test -v -race -cover $(foreach d,$(SOURCE_DIRS),./$(d)/...)
 
 .PHONY: helm-install
-helm-install:
+helm-install: helm-uninstall
 	@echo === install helm
 	@helm install mgx-csi-driver ./charts/mgx-csi-driver --namespace mgx-csi-driver --create-namespace
 

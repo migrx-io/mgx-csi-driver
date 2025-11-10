@@ -1,0 +1,20 @@
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mgxcsi-test
+  labels:
+    app: mgxcsi-pvc
+spec:
+  containers:
+  - name: alpine
+    image: alpine:3
+    imagePullPolicy: "IfNotPresent"
+    command: ["sleep", "365d"]
+    volumeMounts:
+    - mountPath: "/mgxvol"
+      name: mgx-volume
+  volumes:
+  - name: mgx-volume
+    persistentVolumeClaim:
+      claimName: mgxcsi-pvc
