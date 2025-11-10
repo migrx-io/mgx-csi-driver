@@ -9,11 +9,13 @@ import (
 )
 
 type identityServer struct {
+	csi.UnimplementedIdentityServer
 	*csicommon.DefaultIdentityServer
 }
 
 func newIdentityServer(d *csicommon.CSIDriver) *identityServer {
 	return &identityServer{
+		UnimplementedIdentityServer: csi.UnimplementedIdentityServer{},
 		DefaultIdentityServer: csicommon.NewDefaultIdentityServer(d),
 	}
 }

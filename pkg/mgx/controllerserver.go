@@ -2,12 +2,8 @@ package mgx
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -15,16 +11,13 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/klog"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-
 	csicommon "github.com/migrx-io/mgx-csi-driver/pkg/csi-common"
 	"github.com/migrx-io/mgx-csi-driver/pkg/util"
 )
 
 type controllerServer struct {
-	*csicommon.DefaultControllerServer
+	csi.UnimplementedControllerServer
+	driver *csicommon.CSIDriver
 	volumeLocks *util.VolumeLocks
 }
 
@@ -235,6 +228,26 @@ func prepareCreateVolumeReq(ctx context.Context, req *csi.CreateVolumeRequest, s
 		return nil, err
 	}
 
+	qos_r_mbytes_per_sec, err := getIntParameter(params, "qos_r_mbytes_per_sec", 0)
+	if err != nil {
+		return nil, err
+	}
+	qos_w_mbytes_per_sec, err := getIntParameter(params, "qos_w_mbytes_per_sec", 0)
+	if err != nil {
+		return nil, err
+	}
+	qos_rw_ios_per_sec, err := getIntParameter(params, "qos_rw_ios_per_sec", 0)
+	if err != nil {
+		return nil, err
+	}
+
+	storage_compress, err := getIntParameter(params, "storage_compress", 0)
+	if err != nil {
+		return nil, err
+	}
+
+
+
 	createVolReq := util.CreateLVolData{
 		Name:                 req.GetName(),
 		Size:                 sizeMiB,
@@ -242,11 +255,11 @@ func prepareCreateVolumeReq(ctx context.Context, req *csi.CreateVolumeRequest, s
 		Labels:               params["labels"],
 		CacheRCacheSize:      cache_r_cache_size,
 		CacheRWCacheSize:     cache_rw_cache_size,
-		QosRMbytesPerSec:     params["qos_r_mbytes_per_sec"],
-		QosWMbytesPerSec:     params["qos_w_mbytes_per_sec"],
-		QosRWIosPerSec:       params["qos_rw_ios_per_sec"],
+		QosRMbytesPerSec:     qos_r_mbytes_per_sec,
+		QosWMbytesPerSec:     qos_w_mbytes_per_sec,
+		QosRWIosPerSec:       qos_rw_ios_per_sec,
 		StorageEncryptSecret: params["storage_encrypt_secret"],
-		StorageCompress:      params["storage_compress"],
+		StorageCompress:      storage_compress,
 	}
 	return &createVolReq, nil
 }
@@ -327,9 +340,10 @@ func (cs *controllerServer) publishVolume(volumeID string, mgxClient *util.NodeN
 
 	volumeInfo, err := mgxClient.VolumeInfo(mgxVol.lvolID)
 	if err != nil {
-		cs.unpublishVolume(volumeID) //nolint:errcheck
+		cs.unpublishVolume(volumeID, mgxClient) //nolint:errcheck
 		return nil, err
 	}
+
 	return volumeInfo, nil
 }
 
@@ -430,7 +444,8 @@ func (cs *controllerServer) ControllerGetVolume(_ context.Context, req *csi.Cont
 
 func newControllerServer(d *csicommon.CSIDriver) (*controllerServer, error) {
 	server := controllerServer{
-		DefaultControllerServer: csicommon.NewDefaultControllerServer(d),
+		UnimplementedControllerServer: csi.UnimplementedControllerServer{},
+		driver: csicommon.NewDefaultControllerServer(d),
 		volumeLocks:             util.NewVolumeLocks(),
 	}
 	return &server, nil

@@ -1,9 +1,10 @@
 package util
 
 import (
+	"fmt"
 	"net/http"
 	"time"
-
+	
 	"k8s.io/klog"
 )
 
@@ -53,6 +54,23 @@ func (node *NodeNVMf) GetVolume(lvolID string) (*LvolResp, error) {
 	}
 	return lvol, nil
 }
+
+func (node *NodeNVMf) VolumeInfo(lvolID string) (map[string]string, error) {
+	lvol, err := node.Client.getVolume(lvolID)
+	if err != nil {
+		return nil, err
+	}
+	
+	infoMap := map[string]string{
+    	"name": lvol.Name,
+    	"nqn": lvol.Nqn,
+    	"size": fmt.Sprintf("%d", lvol.Size),
+	}
+
+	return infoMap, nil
+}
+
+
 
 func (node *NodeNVMf) GetVolumeSize(lvolID string) (int, error) {
 	lvol, err := node.Client.getVolume(lvolID)
