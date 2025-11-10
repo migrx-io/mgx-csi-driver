@@ -42,19 +42,11 @@ func Run(conf *util.Config) {
 	ids = newIdentityServer(cd)
 
 	if conf.IsNodeServer {
-		var err error
-		ns, err = newNodeServer(cd)
-		if err != nil {
-			klog.Fatalf("failed to create node server: %s", err)
-		}
+		ns = newNodeServer(cd)
 	}
 
 	if conf.IsControllerServer {
-		var err error
-		cs, err = newControllerServer(cd)
-		if err != nil {
-			klog.Fatalf("failed to create controller server: %s", err)
-		}
+		cs = newControllerServer(cd)
 	}
 
 	s := csicommon.NewNonBlockingGRPCServer()

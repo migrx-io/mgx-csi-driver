@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"time"
-	
+
 	"k8s.io/klog"
 )
 
@@ -14,7 +14,6 @@ type NodeNVMf struct {
 
 // NewNVMf creates a new NVMf client
 func NewNVMf(config *ClusterConfig) *NodeNVMf {
-
 	client := RPCClient{
 		HTTPClient: &http.Client{Timeout: cfgRPCTimeoutSeconds * time.Second},
 		Protocol:   config.Protocol,
@@ -60,17 +59,15 @@ func (node *NodeNVMf) VolumeInfo(lvolID string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	infoMap := map[string]string{
-    	"name": lvol.Name,
-    	"nqn": lvol.Nqn,
-    	"size": fmt.Sprintf("%d", lvol.Size),
+		"name": lvol.Name,
+		"nqn":  lvol.Nqn,
+		"size": fmt.Sprintf("%d", lvol.Size),
 	}
 
 	return infoMap, nil
 }
-
-
 
 func (node *NodeNVMf) GetVolumeSize(lvolID string) (int, error) {
 	lvol, err := node.Client.getVolume(lvolID)
@@ -117,7 +114,6 @@ func (node *NodeNVMf) DeleteSnapshot(snapshotID string) error {
 }
 
 func (node *NodeNVMf) UnpublishVolume(lvolID string) error {
-
 	err := node.Client.unpublishVolume(lvolID)
 	if err != nil {
 		return err

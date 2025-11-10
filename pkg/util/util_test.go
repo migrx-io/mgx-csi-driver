@@ -35,7 +35,7 @@ func TestTryLockConcurrent(t *testing.T) {
 	const taskCount = 50
 
 	// only one task should acquire the lock
-	for i := 0; i < taskCount; i++ {
+	for range taskCount {
 		wg.Add(1)
 		go func() {
 			if tryLock.Lock() {

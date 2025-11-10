@@ -18,7 +18,7 @@ import (
 // file name in which volume context is stashed.
 const volumeContextFileName = "volume-context.json"
 
-func ParseJSONFile(fileName string, result interface{}) error {
+func ParseJSONFile(fileName string, result any) error {
 	file, err := os.Open(fileName)
 	if err != nil {
 		return err
@@ -120,7 +120,7 @@ func detectNvmeDeviceName(nvmeModel string) (string, error) {
 	uuidFilePathsReadFlag := make(map[string]struct{})
 
 	// Set 20 seconds timeout at maximum to try to find the exact device name for SMA Nvme
-	for second := 0; second < 20; second++ {
+	for range 20 {
 		deviceName, err := CheckIfNvmeDeviceExists(nvmeModel, uuidFilePathsReadFlag)
 		if err != nil {
 			klog.Infof("detect nvme device '%s': %v", nvmeModel, err)
@@ -160,8 +160,8 @@ func GetNvmeDeviceName(nvmeModel, bdf string) (string, error) {
 }
 
 // ConvertInterfaceToMap converts an interface to a map[string]string
-func ConvertInterfaceToMap(data interface{}) (map[string]string, error) {
-	dataMap, ok := data.(map[string]interface{})
+func ConvertInterfaceToMap(data any) (map[string]string, error) {
+	dataMap, ok := data.(map[string]any)
 	if !ok {
 		return nil, errors.New("the data is not a map[string]interface{}")
 	}
@@ -178,7 +178,7 @@ func ConvertInterfaceToMap(data interface{}) (map[string]string, error) {
 	return strMap, nil
 }
 
-func stashContext(data interface{}, folder, fileName string) error {
+func stashContext(data any, folder, fileName string) error {
 	encodedBytes, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("failed to marshall context JSON: %w", err)
@@ -197,8 +197,8 @@ func stashContext(data interface{}, folder, fileName string) error {
 	return nil
 }
 
-func lookupContext(folder, fileName string) (interface{}, error) {
-	var data interface{}
+func lookupContext(folder, fileName string) (any, error) {
+	var data any
 	fPath := filepath.Join(folder, fileName)
 	encodedBytes, err := os.ReadFile(fPath) // #nosec - intended reading from fPath
 	if err != nil {

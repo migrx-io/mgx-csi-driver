@@ -69,7 +69,7 @@ func NewControllerServiceCapability(captype csi.ControllerServiceCapability_RPC_
 	}
 }
 
-func logGRPC(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+func logGRPC(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 	klog.V(3).Infof("GRPC call: %s", info.FullMethod)
 	klog.V(5).Infof("GRPC request: %s", protosanitizer.StripSecrets(req))
 	resp, err := handler(ctx, req)

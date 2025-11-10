@@ -15,7 +15,7 @@ OUT_DIR := ./bin
 # dir for tools: e.g., golangci-lint
 TOOL_DIR := $(OUT_DIR)/tool
 # use golangci-lint for static code check
-GOLANGCI_VERSION := v1.56.2
+GOLANGCI_VERSION := v2.6.0
 GOLANGCI_BIN := $(TOOL_DIR)/golangci-lint
 # go source, scripts
 SOURCE_DIRS := cmd pkg
@@ -41,7 +41,7 @@ all: build lint test
 .PHONY: build
 build:
 	@echo === building binary
-	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -buildvcs=false -o $(OUT_DIR)/mgxcsi ./cmd/
+	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=$(GOOS) go build -buildvcs=false -o $(OUT_DIR)/mgxcsi ./cmd/
 
 .PHONY: docker-build
 docker-build:
@@ -91,5 +91,5 @@ e2e-test:
 
 .PHONY: clean
 clean:
-	rm -f $(OUT_DIR)/mgxcsi
+	rm -rf $(OUT_DIR)
 	go clean -testcache

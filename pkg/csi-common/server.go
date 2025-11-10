@@ -17,9 +17,12 @@ limitations under the License.
 package csicommon
 
 import (
+	"context"
+
 	"net"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
@@ -63,6 +66,9 @@ func (s *nonBlockingGRPCServer) ForceStop() {
 func (s *nonBlockingGRPCServer) serve(endpoint string, ids csi.IdentityServer, cs csi.ControllerServer, ns csi.NodeServer) {
 	var err error
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	proto, addr, err := parseEndpoint(endpoint)
 	if err != nil {
 		klog.Fatal(err.Error())
@@ -75,7 +81,9 @@ func (s *nonBlockingGRPCServer) serve(endpoint string, ids csi.IdentityServer, c
 		}
 	}
 
-	listener, err := net.Listen(proto, addr)
+	lc := net.ListenConfig{}
+
+	listener, err := lc.Listen(ctx, proto, addr)
 	if err != nil {
 		klog.Fatalf("Failed to listen: %v", err)
 	}

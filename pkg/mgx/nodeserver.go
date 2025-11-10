@@ -4,60 +4,48 @@ import (
 	"context"
 	"fmt"
 	"os"
-	osexec "os/exec"
-	"strconv"
-	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
 	mount "k8s.io/mount-utils"
 	"k8s.io/utils/exec"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 
 	csicommon "github.com/migrx-io/mgx-csi-driver/pkg/csi-common"
 	"github.com/migrx-io/mgx-csi-driver/pkg/util"
 )
 
 type nodeServer struct {
-	*csicommon.DefaultNodeServer
+	csi.UnimplementedNodeServer
+	driver      *csicommon.CSIDriver
 	mounter     mount.Interface
 	volumeLocks *util.VolumeLocks
 }
 
-func newNodeServer(d *csicommon.CSIDriver) (*nodeServer, error) {
-
+func newNodeServer(d *csicommon.CSIDriver) *nodeServer {
 	ns := &nodeServer{
-		DefaultNodeServer: csicommon.NewDefaultNodeServer(d),
-		mounter:           mount.New(""),
-		volumeLocks:       util.NewVolumeLocks(),
+		driver:      d,
+		mounter:     mount.New(""),
+		volumeLocks: util.NewVolumeLocks(),
 	}
 
-	return ns, nil
+	return ns
 }
 
-func (ns *nodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
-
+func (ns *nodeServer) NodeGetInfo(_ context.Context, _ *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
 	response := &csi.NodeGetInfoResponse{
-		NodeId: ns.Driver.GetNodeID(),
+		NodeId: ns.driver.GetNodeID(),
 	}
 
 	return response, nil
 }
 
-func (ns *nodeServer) NodeGetVolumeStats(_ context.Context, _ *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
+func (*nodeServer) NodeGetVolumeStats(_ context.Context, _ *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
 func (ns *nodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
-
 	volumeID := req.GetVolumeId()
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
@@ -173,7 +161,7 @@ func (ns *nodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpubl
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 
-func (ns *nodeServer) NodeGetCapabilities(_ context.Context, _ *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
+func (*nodeServer) NodeGetCapabilities(_ context.Context, _ *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
 	return &csi.NodeGetCapabilitiesResponse{
 		Capabilities: []*csi.NodeServiceCapability{
 			{
@@ -201,8 +189,8 @@ func (ns *nodeServer) NodeGetCapabilities(_ context.Context, _ *csi.NodeGetCapab
 	}, nil
 }
 
-func (ns *nodeServer) NodeExpandVolume(_ context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
-	klog.Infof("NodeExpandVolume: called with args %+v", *req)
+func (*nodeServer) NodeExpandVolume(_ context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
+	klog.Infof("NodeExpandVolume: called with args %+v", req)
 
 	volumeID := req.GetVolumeId()
 	volumeMountPath := req.GetVolumePath()
@@ -239,10 +227,9 @@ func (ns *nodeServer) NodeExpandVolume(_ context.Context, req *csi.NodeExpandVol
 	return &csi.NodeExpandVolumeResponse{}, nil
 }
 
-// must be idempotent
-//
-//nolint:cyclop // many cases in switch increases complexity
-func (ns *nodeServer) stageVolume(devicePath, stagingPath string, req *csi.NodeStageVolumeRequest, volumeContext map[string]string) error {
+func (*nodeServer) stageVolume(devicePath, stagingPath string, req *csi.NodeStageVolumeRequest, volumeContext map[string]string) error { //nolint:unparam // placeholder for future error handling
+	klog.Infof("stageVolume: devicePath: %s, stagingPath: %s, req: %v, ctx: %v", devicePath, stagingPath, req, volumeContext)
+
 	return nil
 }
 
@@ -261,11 +248,8 @@ func (ns *nodeServer) isStaged(stagingPath string) (bool, error) {
 	return isMount, nil
 }
 
-// must be idempotent
-func (ns *nodeServer) publishVolume(stagingPath string, req *csi.NodePublishVolumeRequest) error {
+func (ns *nodeServer) publishVolume(_ string, req *csi.NodePublishVolumeRequest) error {
 	targetPath := req.GetTargetPath()
-
-	fsType := req.GetVolumeCapability().GetMount().GetFsType()
 
 	stagingParentPath := req.GetStagingTargetPath()
 	volumeContext, err := util.LookupVolumeContext(stagingParentPath)
@@ -277,9 +261,9 @@ func (ns *nodeServer) publishVolume(stagingPath string, req *csi.NodePublishVolu
 	if !ok || devicePath == "" {
 		return status.Errorf(codes.Internal, "could not find device path for volume %s", req.GetVolumeId())
 	}
-	stagingPath = devicePath
+	stagingPath := devicePath
 
-	fsType = ""
+	fsType := ""
 	if err = ns.MakeFile(targetPath); err != nil {
 		if removeErr := os.Remove(targetPath); removeErr != nil {
 			return status.Errorf(codes.Internal, "Could not remove mount target %q: %v", targetPath, removeErr)
@@ -318,7 +302,7 @@ func (ns *nodeServer) deleteMountPoint(path string) error {
 	return os.RemoveAll(path)
 }
 
-func (ns *nodeServer) MakeFile(path string) error {
+func (*nodeServer) MakeFile(path string) error {
 	// Create file
 	newFile, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0750)
 	if err != nil {
@@ -330,7 +314,7 @@ func (ns *nodeServer) MakeFile(path string) error {
 	return nil
 }
 
-func getStagingTargetPath(req interface{}) string {
+func getStagingTargetPath(req any) string {
 	switch vr := req.(type) {
 	case *csi.NodeStageVolumeRequest:
 		return vr.GetStagingTargetPath() + "/" + vr.GetVolumeId()

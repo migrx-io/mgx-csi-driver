@@ -44,14 +44,14 @@ type initiatorNVMf struct {
 func NewMGXClient() (*NodeNVMf, error) {
 	secretFile := FromEnv("MGX_SECRET", "/etc/csi-secret/secret.json")
 
-	var clusterConfig ClusterConfig
+	var clusterConfig *ClusterConfig
 
 	err := ParseJSONFile(secretFile, &clusterConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse secret file: %w", err)
 	}
 
-	if &clusterConfig == nil {
+	if clusterConfig == nil {
 		return nil, fmt.Errorf("failed to find secret")
 	}
 
@@ -64,11 +64,10 @@ func NewMGXClient() (*NodeNVMf, error) {
 		clusterConfig.Nodes,
 	)
 
-	return NewNVMf(&clusterConfig), nil
+	return NewNVMf(clusterConfig), nil
 }
 
 func NewMGXCsiInitiator(volumeContext map[string]string) (MGXCsiInitiator, error) {
-
 	klog.Infof("mgx nqn :%s", volumeContext["nqn"])
 
 	return &initiatorNVMf{
@@ -78,11 +77,9 @@ func NewMGXCsiInitiator(volumeContext map[string]string) (MGXCsiInitiator, error
 		ctrlLossTmo:    ctrlLossTmo,
 		fastIOFailTmo:  fastIOFailTmo,
 	}, nil
-
 }
 
 func (nvmf *initiatorNVMf) Connect() (string, error) {
-
 	klog.Info("coonect to ", nvmf.nqn)
 
 	alreadyConnected, err := isNqnConnected(nvmf.nqn)
@@ -91,15 +88,19 @@ func (nvmf *initiatorNVMf) Connect() (string, error) {
 		return "", err
 	}
 
-	if !alreadyConnected {
+	var (
+		mgxClient  *NodeNVMf
+		connection *LvolResp
+	)
 
-		mgxClient, err := NewMGXClient()
+	if !alreadyConnected {
+		mgxClient, err = NewMGXClient()
 		if err != nil {
 			klog.Errorf("failed to create mgx client: %v", err)
 			return "", err
 		}
 
-		connection, err := fetchLvolConnection(mgxClient, nvmf.name)
+		connection, err = fetchLvolConnection(mgxClient, nvmf.name)
 		if err != nil {
 			klog.Errorf("Failed to get lvol connection: %v", err)
 			return "", err
@@ -121,7 +122,6 @@ func (nvmf *initiatorNVMf) Connect() (string, error) {
 			klog.Errorf("command %v failed: %s", cmdLine, err)
 			return "", err
 		}
-
 	}
 
 	deviceGlob := fmt.Sprintf(DevDiskByID, nvmf.name)
@@ -164,7 +164,7 @@ func waitForDeviceReady(deviceGlob string, seconds int) (string, error) {
 
 // wait for device file gone or timeout
 func waitForDeviceGone(deviceGlob string) error {
-	for i := 0; i <= 20; i++ {
+	for range 21 {
 		matches, err := filepath.Glob(deviceGlob)
 		if err != nil {
 			return err
@@ -177,7 +177,6 @@ func waitForDeviceGone(deviceGlob string) error {
 	return fmt.Errorf("timed out waiting device gone: %s", deviceGlob)
 }
 
-// exec shell command with timeout(in seconds)
 func execWithTimeout(cmdLine []string, timeout int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
@@ -197,10 +196,14 @@ func execWithTimeout(cmdLine []string, timeout int) error {
 }
 
 func isNqnConnected(nqn string) (bool, error) {
-	cmd := exec.Command("nvme", "list-subsys")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "nvme", "list-subsys")
+
 	output, err := cmd.Output()
 	if err != nil {
-		return false, fmt.Errorf("failed to execute nvme list-subsys: %v", err)
+		return false, fmt.Errorf("failed to execute nvme list-subsys: %w", err)
 	}
 
 	lines := strings.Split(string(output), "\n")
@@ -227,10 +230,9 @@ func execWithTimeoutRetry(cmdLine []string, timeout, retry int) (err error) {
 }
 
 func fetchLvolConnection(mgxClient *NodeNVMf, lvolID string) (*LvolResp, error) {
-
 	volumeInfo, err := mgxClient.GetVolume(lvolID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch connection: %v", err)
+		return nil, fmt.Errorf("failed to fetch connection: %w", err)
 	}
 
 	var connection *LvolResp

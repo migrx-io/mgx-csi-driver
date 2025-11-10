@@ -2,12 +2,14 @@ package util
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net"
-	"time"
 	"io"
+	"net"
+	"net/http"
+	"time"
+
 	"k8s.io/klog"
 )
 
@@ -68,7 +70,9 @@ type ClusterConfig struct {
 	Password  string   `json:"password"`
 }
 
-func (client *RPCClient) Authenticate(host, username, password string) error {
+func (client *RPCClient) Authenticate(host string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
 	authURL := fmt.Sprintf("%s://%s/api/v1/auth", client.Protocol, host)
 
@@ -86,7 +90,7 @@ func (client *RPCClient) Authenticate(host, username, password string) error {
 	}
 
 	// Step 2: Send POST request
-	req, err := http.NewRequest("POST", authURL, bytes.NewBuffer(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", authURL, bytes.NewBuffer(body))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -108,7 +112,7 @@ func (client *RPCClient) Authenticate(host, username, password string) error {
 	}
 
 	// Step 4: Parse JSON response
-	var respJSON map[string]interface{}
+	var respJSON map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&respJSON); err != nil {
 		return fmt.Errorf("failed to decode response: %w", err)
 	}
@@ -124,13 +128,15 @@ func (client *RPCClient) Authenticate(host, username, password string) error {
 	return nil
 }
 
-func (client *RPCClient) Call(plugin, op string, data interface{}) (interface{}, error) {
-
+func (client *RPCClient) Call(plugin, op string, data any) (any, error) {
 	klog.Infof("Calling API: op: %s: plugin: %s: data: %v\n", op, plugin, data)
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	// Build request body
-	req := map[string]interface{}{
-		"context": map[string]interface{}{
+	req := map[string]any{
+		"context": map[string]any{
 			"op": op,
 		},
 		"data": data,
@@ -141,75 +147,69 @@ func (client *RPCClient) Call(plugin, op string, data interface{}) (interface{},
 		return nil, err
 	}
 
-	// find avaliable node and call
+	// find available node and call
 	for _, n := range client.Nodes {
-
-		if isReachable(n) {
-
-			klog.Infof("Calling API: node: %s\n", n)
-
-			// If there is no Token then request it
-			if client.Token == "" {
-				err = client.Authenticate(n, client.Username, client.Password)
-				if err != nil {
-					return nil, err
-				}
-			}
-
-			requestURL := fmt.Sprintf("%s://%s/api/v1/cluster/%s/plugins/%s", client.Protocol, client.Cluster, plugin)
-			req, err := http.NewRequest("POST", requestURL, bytes.NewReader(reqData))
-			if err != nil {
-				return nil, fmt.Errorf("op: %s, plugin: %s, err:  %w", op, plugin, err)
-			}
-
-			req.Header.Add("Authorization", client.Token)
-			req.Header.Set("Content-Type", "application/json")
-
-			resp, err := client.HTTPClient.Do(req)
-			if err != nil {
-				return nil, fmt.Errorf("op: %s, plugin: %s, err:  %w", op, plugin, err)
-			}
-
-			defer resp.Body.Close()
-
-
-			if resp.StatusCode != http.StatusOK {
-				return nil, fmt.Errorf("%v", resp.Body)
-			}
-
-			if resp.StatusCode == http.StatusOK {
-				// Ensure data is a map
-
-				body, _ := io.ReadAll(resp.Body)
-				var m map[string]interface{}
-
-				if err := json.Unmarshal(body, &m); err != nil {
-					return nil, fmt.Errorf("unmarshal: %w", err)
-				}
-
-				// status == 200 -> check "error" field in JSON body
-				if errVal, exists := m["error"]; exists && errVal != nil {
-					return nil, fmt.Errorf("%v", errVal)
-				}
-
-				if val, exists := m["data"]; exists {
-					return val, nil
-				}
-			}
-
-			return nil, fmt.Errorf("unexpected response format")
-
-		} else {
-			klog.Infof("Calling API: node: %s\n", n)
-
+		if !isReachable(n) {
+			continue
 		}
+		klog.Infof("Calling API: node: %s\n", n)
+
+		// If there is no Token then request it
+		if client.Token == "" {
+			err = client.Authenticate(n)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		requestURL := fmt.Sprintf("%s://%s/api/v1/cluster/%s/plugins/%s", client.Protocol, n, client.Cluster, plugin)
+		req, err := http.NewRequestWithContext(ctx, "POST", requestURL, bytes.NewReader(reqData))
+
+		if err != nil {
+			return nil, fmt.Errorf("op: %s, plugin: %s, err:  %w", op, plugin, err)
+		}
+
+		req.Header.Add("Authorization", client.Token)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.HTTPClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("op: %s, plugin: %s, err:  %w", op, plugin, err)
+		}
+
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("%v", resp.Body)
+		}
+
+		if resp.StatusCode == http.StatusOK {
+			// Ensure data is a map
+
+			body, _ := io.ReadAll(resp.Body)
+			var m map[string]any
+
+			if err := json.Unmarshal(body, &m); err != nil {
+				return nil, fmt.Errorf("unmarshal: %w", err)
+			}
+
+			// status == 200 -> check "error" field in JSON body
+			if errVal, exists := m["error"]; exists && errVal != nil {
+				return nil, fmt.Errorf("%v", errVal)
+			}
+
+			if val, exists := m["data"]; exists {
+				return val, nil
+			}
+		}
+
+		return nil, fmt.Errorf("unexpected response format")
 	}
 
-	return nil, fmt.Errorf("No nodes avaliable")
+	return nil, fmt.Errorf("no nodes available")
 }
 
 func (client *RPCClient) createVolume(params *CreateLVolData) (string, error) {
-
 	klog.V(5).Info("createVolume", params)
 
 	_, err := client.Call("storage", "volume_create", params)
@@ -220,16 +220,14 @@ func (client *RPCClient) createVolume(params *CreateLVolData) (string, error) {
 	return params.Name, nil
 }
 
-func (client *RPCClient) publishVolume(lvolID string) error {
-
+func (*RPCClient) publishVolume(lvolID string) error {
 	klog.V(5).Info("publishVolume", lvolID)
 
 	return nil
 }
 
 func (client *RPCClient) getVolume(lvolID string) (*LvolResp, error) {
-
-	params := map[string]interface{}{
+	params := map[string]any{
 		"name": lvolID,
 	}
 
@@ -248,12 +246,10 @@ func (client *RPCClient) getVolume(lvolID string) (*LvolResp, error) {
 	}
 
 	return result, nil
-
 }
 
 func (client *RPCClient) deleteVolume(lvolID string) error {
-
-	params := map[string]interface{}{
+	params := map[string]any{
 		"name": lvolID,
 	}
 
@@ -267,16 +263,13 @@ func (client *RPCClient) deleteVolume(lvolID string) error {
 	return err
 }
 
-func (client *RPCClient) resizeVolume(lvolID string, size int64) (bool, error) {
-
-	klog.V(5).Info("resizeVolume", lvolID)
+func (*RPCClient) resizeVolume(lvolID string, size int64) (bool, error) {
+	klog.V(5).Info("resizeVolume", lvolID, size)
 
 	return false, nil
-
 }
 
-func (client *RPCClient) listSnapshots() ([]*SnapshotResp, error) {
-
+func (*RPCClient) listSnapshots() ([]*SnapshotResp, error) {
 	var results []*SnapshotResp
 
 	klog.V(5).Info("listSnapshots")
@@ -284,7 +277,7 @@ func (client *RPCClient) listSnapshots() ([]*SnapshotResp, error) {
 	return results, nil
 }
 
-func (client *RPCClient) createSnapshot(lvolID, snapShotName string) (string, error) {
+func (*RPCClient) createSnapshot(lvolID, snapShotName string) (string, error) { //nolint:unparam // placeholder for future error handling
 	var snapshotID string
 
 	klog.V(5).Info("createSnapshot", lvolID, snapShotName)
@@ -292,22 +285,25 @@ func (client *RPCClient) createSnapshot(lvolID, snapShotName string) (string, er
 	return snapshotID, nil
 }
 
-func (client *RPCClient) deleteSnapshot(snapshotID string) error {
-
+func (*RPCClient) deleteSnapshot(snapshotID string) error {
 	klog.V(5).Info("deleteSnapshot", snapshotID)
 
 	return nil
 }
 
-func (client *RPCClient) unpublishVolume(lvolID string) error {
-
+func (*RPCClient) unpublishVolume(lvolID string) error {
 	klog.V(5).Info("unpublishVolume", lvolID)
 
 	return nil
 }
 
 func isReachable(addr string) bool {
-	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	dialer := &net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+
 	if err != nil {
 		return false
 	}

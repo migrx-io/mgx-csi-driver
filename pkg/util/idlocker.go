@@ -17,7 +17,7 @@ func NewVolumeLocks() *VolumeLocks {
 // Lock obtain the lock corresponding to the volumeID
 func (vl *VolumeLocks) Lock(volumeID string) func() {
 	value, _ := vl.mutexes.LoadOrStore(volumeID, &sync.Mutex{})
-	mtx, _ := value.(*sync.Mutex) //nolint:errcheck // will not fail to convert
+	mtx, _ := value.(*sync.Mutex)
 	mtx.Lock()
 	return func() { mtx.Unlock() }
 }

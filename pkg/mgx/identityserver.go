@@ -10,37 +10,23 @@ import (
 
 type identityServer struct {
 	csi.UnimplementedIdentityServer
-	*csicommon.DefaultIdentityServer
+	driver *csicommon.CSIDriver
 }
 
 func newIdentityServer(d *csicommon.CSIDriver) *identityServer {
 	return &identityServer{
 		UnimplementedIdentityServer: csi.UnimplementedIdentityServer{},
-		DefaultIdentityServer: csicommon.NewDefaultIdentityServer(d),
+		driver:                      d,
 	}
 }
 
-func (ids *identityServer) GetPluginCapabilities(_ context.Context, _ *csi.GetPluginCapabilitiesRequest) (*csi.GetPluginCapabilitiesResponse, error) {
+func (*identityServer) GetPluginCapabilities(context.Context, *csi.GetPluginCapabilitiesRequest) (*csi.GetPluginCapabilitiesResponse, error) {
 	return &csi.GetPluginCapabilitiesResponse{
 		Capabilities: []*csi.PluginCapability{
 			{
 				Type: &csi.PluginCapability_Service_{
 					Service: &csi.PluginCapability_Service{
 						Type: csi.PluginCapability_Service_CONTROLLER_SERVICE,
-					},
-				},
-			},
-			{
-				Type: &csi.PluginCapability_VolumeExpansion_{
-					VolumeExpansion: &csi.PluginCapability_VolumeExpansion{
-						Type: csi.PluginCapability_VolumeExpansion_ONLINE,
-					},
-				},
-			},
-			{
-				Type: &csi.PluginCapability_VolumeExpansion_{
-					VolumeExpansion: &csi.PluginCapability_VolumeExpansion{
-						Type: csi.PluginCapability_VolumeExpansion_OFFLINE,
 					},
 				},
 			},

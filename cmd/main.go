@@ -19,7 +19,7 @@ var conf = util.Config{
 	DriverVersion: driverVersion,
 }
 
-func init() {
+func setupFlags() {
 	flag.StringVar(&conf.DriverName, "drivername", driverName, "Name of the driver")
 	flag.StringVar(&conf.Endpoint, "endpoint", "unix://tmp/mgxcsi.sock", "CSI endpoint")
 	flag.StringVar(&conf.NodeID, "nodeid", "", "node id")
@@ -34,6 +34,8 @@ func init() {
 }
 
 func main() {
+	setupFlags()
+
 	klog.Infof("Starting MGX-CSI driver: %v version: %v", conf.DriverName, driverVersion)
 
 	mgx.Run(&conf)
