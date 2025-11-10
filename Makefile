@@ -109,7 +109,7 @@ unit-test:
 .PHONY: helm-install
 helm-install: helm-uninstall
 	@echo === install helm
-	@helm install mgx-csi-driver ./charts/mgx-csi-driver --namespace mgx-csi-driver --create-namespace
+	@helm install mgx-csi-driver ./charts/mgx-csi-driver --namespace mgx-csi-driver --create-namespace --set csiSecret.clusterConfig.username=admin --set csiSecret.clusterConfig.password=admin123 --set csiSecret.clusterConfig.nodes={"host.docker.internal:8082"}
 
 .PHONY: helm-uninstall
 helm-uninstall:
