@@ -68,15 +68,15 @@ $(GOLANGCI_BIN):
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(TOOL_DIR) $(GOLANGCI_VERSION)
 
 
-.PHONY: kind-create-cluster
-kind-create-cluster: install-kind
+.PHONY: kind-create
+kind-create: install-kind
 	@echo "Creating Kind cluster '$(KIND_CLUSTER_NAME)' with 3 worker nodes..."
 	@$(TOOL_DIR)/kind create cluster --name $(KIND_CLUSTER_NAME) --config ./e2e/kind-config.yaml
 	@echo "Kind cluster '$(KIND_CLUSTER_NAME)' created successfully"
 
 
-.PHONY: kind-delete-cluster
-kind-delete-cluster:
+.PHONY: kind-delete
+kind-delete:
 	@echo "Deleting Kind cluster '$(KIND_CLUSTER_NAME)'..."
 	@$(TOOL_DIR)/kind delete cluster --name $(KIND_CLUSTER_NAME)
 	@echo "Kind cluster '$(KIND_CLUSTER_NAME)' deleted successfully"
@@ -100,6 +100,21 @@ mod-check:
 unit-test:
 	@echo === running unit test
 	@go test -v -race -cover $(foreach d,$(SOURCE_DIRS),./$(d)/...)
+
+.PHONY: helm-install
+helm-install:
+	@echo === install helm
+	@helm install mgx-csi-driver ./charts/mgx-csi-driver --namespace mgx-csi-driver --create-namespace
+
+.PHONY: helm-uninstall
+helm-uninstall:
+	@echo === uninstall helm
+	@helm uninstall mgx-csi-driver -n mgx-csi-driver
+
+.PHONY: kind-load
+kind-load: helm-uninstall docker-build
+	@echo === load to kind
+	@kind load docker-image mgx-csi-driver:latest --name $(KIND_CLUSTER_NAME)
 
 # e2e test
 .PHONY: e2e-test

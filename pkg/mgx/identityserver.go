@@ -33,3 +33,9 @@ func (*identityServer) GetPluginCapabilities(context.Context, *csi.GetPluginCapa
 		},
 	}, nil
 }
+
+func (*identityServer) Probe(context.Context, *csi.ProbeRequest) (*csi.ProbeResponse, error) {
+	// You can add readiness checks here if needed.
+	// For now, return OK to satisfy sidecars
+	return &csi.ProbeResponse{}, nil
+}
