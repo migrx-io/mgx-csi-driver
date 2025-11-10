@@ -1,0 +1,67 @@
+driverName: csi.migrx.io
+
+image:
+  mgxcsi:
+    repository: migrx/mgx-csi-driver
+    tag: latest
+    pullPolicy: IfNotPresent
+  csiProvisioner:
+    repository: registry.k8s.io/sig-storage/csi-provisioner
+    tag: v6.0.0
+    pullPolicy: IfNotPresent
+  nodeDriverRegistrar:
+    repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
+    tag: v2.15.0
+    pullPolicy: IfNotPresent
+  csiSnapshotter:
+    repository: registry.k8s.io/sig-storage/csi-snapshotter
+    tag: v8.4.0
+    pullPolicy: IfNotPresent
+  externalSnapshotter:
+    repository: registry.k8s.io/sig-storage/snapshot-controller
+    tag: v8.4.0
+    pullPolicy: IfNotPresent
+
+serviceAccount:
+  # Specifies whether a serviceAccount should be created
+  create: true
+
+rbac:
+  # Specifies whether RBAC resources should be created
+  create: true
+
+storageclass:
+  # Specifies whether a spdkdev should be created
+  create: true
+
+controller:
+  replicas: 1
+
+# The single snapshot controller deployment works for all CSI drivers
+# in a cluster. So enable it only if you kubernetes cluster does not
+# have a snapshot controller
+externalSnapshotter:
+  enabled: false
+  name: snapshot-controller
+  priorityClassName: system-cluster-critical
+  controller:
+    replicas: 1
+  resources:
+    limits:
+      memory: 300Mi
+    requests:
+      cpu: 10m
+      memory: 20Mi
+  # Create volume snapshot CRDs.
+  customResourceDefinitions:
+    # if set true, VolumeSnapshot, VolumeSnapshotContent and
+    # VolumeSnapshotClass CRDs will be created.
+    enabled: true
+
+# Configuration for the csiSecret
+csiSecret:
+  rpcTokens:
+  # The "name" matches "csiConfig.node.name"
+  - name: *name
+    username: spdkcsiuser
+    password: spdkcsipass
