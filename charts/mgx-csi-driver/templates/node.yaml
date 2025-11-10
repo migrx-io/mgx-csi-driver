@@ -1,26 +1,23 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Arm Limited and Contributors
-# Copyright (c) Intel Corporation
 ---
 kind: DaemonSet
 apiVersion: apps/v1
 metadata:
-  name: spdkcsi-node
+  name: mgxcsi-node
   namespace: {{ .Release.Namespace }}
-{{ include "spdk.labels" . | indent 2 }}
+{{ include "mgx.labels" . | indent 2 }}
 spec:
   selector:
     matchLabels:
-      app: spdkcsi-node
+      app: mgxcsi-node
   template:
     metadata:
-{{ include "spdk.labels" . | indent 6 }}
-        app: spdkcsi-node
+{{ include "mgx.labels" . | indent 6 }}
+        app: mgxcsi-node
     spec:
-      serviceAccount: spdkcsi-node-sa
+      serviceAccount: mgxcsi-node-sa
       hostNetwork: true
       containers:
-      - name: spdkcsi-registrar
+      - name: mgxcsi-registrar
         securityContext:
           privileged: true
         image: "{{ .Values.image.nodeDriverRegistrar.repository }}:{{ .Values.image.nodeDriverRegistrar.tag }}"
@@ -28,12 +25,12 @@ spec:
         args:
         - "--v=5"
         - "--csi-address=unix:///csi/csi.sock"
-        - "--kubelet-registration-path=/var/lib/kubelet/plugins/csi.spdk.io/csi.sock"
+        - "--kubelet-registration-path=/var/lib/kubelet/plugins/csi.migrx.io/csi.sock"
         livenessProbe:
           exec:
             command:
             - /csi-node-driver-registrar
-            - --kubelet-registration-path=/var/lib/kubelet/plugins/csi.spdk.io/csi.sock
+            - --kubelet-registration-path=/var/lib/kubelet/plugins/csi.migrx.io/csi.sock
             - --mode=kubelet-registration-probe
           initialDelaySeconds: 30
           timeoutSeconds: 15
@@ -42,14 +39,14 @@ spec:
           mountPath: /csi
         - name: registration-dir
           mountPath: /registration
-      - name: spdkcsi-node
+      - name: mgxcsi-node
         securityContext:
           privileged: true
           capabilities:
             add: ["SYS_ADMIN"]
           allowPrivilegeEscalation: true
-        image: "{{ .Values.image.spdkcsi.repository }}:{{ .Values.image.spdkcsi.tag }}"
-        imagePullPolicy: {{ .Values.image.spdkcsi.pullPolicy }}
+        image: "{{ .Values.image.mgxcsi.repository }}:{{ .Values.image.mgxcsi.tag }}"
+        imagePullPolicy: {{ .Values.image.mgxcsi.pullPolicy }}
         args:
         - "--v=5"
         - "--endpoint=unix:///csi/csi.sock"
@@ -60,11 +57,6 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
-        lifecycle:
-          postStart:
-            exec:
-              command: ["/bin/sh", "-c",
-                        "/usr/sbin/iscsid || echo failed to start iscsid"]
         volumeMounts:
         - name: socket-dir
           mountPath: /csi
@@ -78,13 +70,14 @@ spec:
           mountPath: /dev
         - name: host-sys
           mountPath: /sys
-        - name: spdkcsi-nodeserver-config
-          mountPath: /etc/spdkcsi-nodeserver-config/
+        - name: mgxcsi-secret
+          mountPath: /etc/csi-secret/secret.json
+          subPath: secret.json
           readOnly: true
       volumes:
       - name: socket-dir
         hostPath:
-          path: /var/lib/kubelet/plugins/csi.spdk.io
+          path: /var/lib/kubelet/plugins/csi.migrx.io
           type: DirectoryOrCreate
       - name: registration-dir
         hostPath:
@@ -104,6 +97,6 @@ spec:
       - name: host-sys
         hostPath:
           path: /sys
-      - name: spdkcsi-nodeserver-config
-        configMap:
-          name: spdkcsi-nodeservercm
+      - name: mgxcsi-secret
+        secret:
+          secretName: mgxcsi-secret

@@ -1,7 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Arm Limited and Contributors
-# Copyright (c) Intel Corporation
-
 {{- if .Values.externalSnapshotter.enabled -}}
 # RBAC file for the snapshot controller.
 #

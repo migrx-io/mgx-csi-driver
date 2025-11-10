@@ -8,4 +8,4 @@ keywords:
 - mgx-csi-driver
 home: https://github.com/migrx-io/mgx-csi-driver
 sources:
-- https://github.com/spdk/spdk-csi/tree/master/charts/spdk-csi
+- https://github.com/migrx-io/mgx-csi-driver/tree/master/charts/mgx-csi-driver

@@ -1,18 +1,21 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Arm Limited and Contributors
-# Copyright (c) Intel Corporation
-
 {{- if .Values.storageclass.create -}}
 ---
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: spdkcsi-sc
-provisioner: csi.spdk.io
+  name: mgxcsi-sc
+provisioner: csi.migrx.io
 parameters:
-  fsType: ext4
-  csi.storage.k8s.io/provisioner-secret-name: spdkcsi-secret
-  csi.storage.k8s.io/provisioner-secret-namespace: default
+  config: default
+  labels: "pool=pool1,tier=dev"
+  cache_r_cache_size: 4096
+  cache_rw_cache_size: 1024
+  qos_r_mbytes_per_sec: 0
+  qos_w_mbytes_per_sec: 0
+  qos_rw_ios_per_sec: 0
+  storage_encrypt_secret: "secret_key"
+  storage_compress: 0
 reclaimPolicy: Delete
 volumeBindingMode: Immediate
+allowVolumeExpansion: false
 {{- end -}}

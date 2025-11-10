@@ -34,6 +34,10 @@ storageclass:
   # Specifies whether  should be created
   create: true
 
+externallyManagedSecret:
+  # Specifies whether a externallyManagedConfigmap should be created
+  create: true 
+
 controller:
   replicas: 1
 
@@ -60,8 +64,11 @@ externalSnapshotter:
 
 # Configuration for the csiSecret
 csiSecret:
-  rpcTokens:
-  # The "name" matches "csiConfig.node.name"
-  - name: *name
-    username: spdkcsiuser
-    password: spdkcsipass
+  clusterConfig:
+    protocol: http
+    nodes:
+      - localhost:8082
+    cluster: main
+    ns: main
+    username: ""
+    password: ""
