@@ -1,6 +1,6 @@
 # Installation with Helm 3
 
-Follow this guide to install the SPDK-CSI Driver for Kubernetes.
+Follow this guide to install the Mgx CSI Driver for Kubernetes.
 
 ## Prerequisites
 
@@ -10,7 +10,7 @@ Follow this guide to install the SPDK-CSI Driver for Kubernetes.
 
 ```console
 cd charts
-helm install mgx-csi-driver ./spdk-csi --namespace mgx-csi-driver
+helm install mgx-csi-driver ./mgx-csi-driver --namespace mgx-csi-driver
 ```
 
 ## After installation succeeds, you can get a status of Chart

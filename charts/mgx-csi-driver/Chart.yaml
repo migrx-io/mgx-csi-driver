@@ -1,16 +1,11 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) Arm Limited and Contributors
-# Copyright (c) Intel Corporation
----
 apiVersion: v1
 appVersion: latest
-description: CSI SPDK Driver for Kubernetes
-name: spdk-csi
+description: CSI Mgx Driver for Kubernetes
+name: mgx-csi-driver
 version: 0.1
 keywords:
-- spdk
 - csi
-- spdk-csi
-home: https://github.com/spdk/spdk-csi
+- mgx-csi-driver
+home: https://github.com/migrx-io/mgx-csi-driver
 sources:
 - https://github.com/spdk/spdk-csi/tree/master/charts/spdk-csi
