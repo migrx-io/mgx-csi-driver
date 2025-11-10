@@ -75,6 +75,13 @@ kind-create-cluster: install-kind
 	@echo "Kind cluster '$(KIND_CLUSTER_NAME)' created successfully"
 
 
+.PHONY: kind-delete-cluster
+kind-delete-cluster:
+	@echo "Deleting Kind cluster '$(KIND_CLUSTER_NAME)'..."
+	@$(TOOL_DIR)/kind delete cluster --name $(KIND_CLUSTER_NAME)
+	@echo "Kind cluster '$(KIND_CLUSTER_NAME)' deleted successfully"
+
+
 .PHONY: install-kind
 install-kind:
 	@echo "Installing Kind version $(KIND_VERSION)..."
