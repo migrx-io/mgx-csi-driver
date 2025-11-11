@@ -74,6 +74,8 @@ func (client *RPCClient) Authenticate(host string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	klog.V(5).Infof("Calling Authenticate: host: %s", host)
+
 	authURL := fmt.Sprintf("%s://%s/api/v1/auth", client.Protocol, host)
 
 	// Step 1: Build JSON payload
@@ -111,6 +113,8 @@ func (client *RPCClient) Authenticate(host string) error {
 		return fmt.Errorf("auth failed: status=%d body=%s", resp.StatusCode, bodyBytes)
 	}
 
+	klog.V(5).Infof("Calling Authenticate: resp.StatusCode: %d", resp.StatusCode)
+
 	// Step 4: Parse JSON response
 	var respJSON map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&respJSON); err != nil {
@@ -123,13 +127,15 @@ func (client *RPCClient) Authenticate(host string) error {
 		return fmt.Errorf("failed to extract access_token")
 	}
 
+	klog.V(5).Infof("Calling Authenticate: accessToken received..")
+
 	client.Token = fmt.Sprintf("JWT %s", accessToken)
 
 	return nil
 }
 
 func (client *RPCClient) Call(plugin, op string, data any) (any, error) {
-	klog.Infof("Calling API: op: %s: plugin: %s: data: %v\n", op, plugin, data)
+	klog.V(5).Infof("Calling API: op: %s, plugin: %s, data: %v\n", op, plugin, data)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -152,7 +158,7 @@ func (client *RPCClient) Call(plugin, op string, data any) (any, error) {
 		if !isReachable(n) {
 			continue
 		}
-		klog.Infof("Calling API: node: %s\n", n)
+		klog.V(5).Infof("Calling API: node: %s, data: %s", n, string(reqData))
 
 		// If there is no Token then request it
 		if client.Token == "" {
@@ -163,8 +169,7 @@ func (client *RPCClient) Call(plugin, op string, data any) (any, error) {
 		}
 
 		requestURL := fmt.Sprintf("%s://%s/api/v1/cluster/%s/plugins/%s", client.Protocol, n, client.Cluster, plugin)
-		req, err := http.NewRequestWithContext(ctx, "POST", requestURL, bytes.NewReader(reqData))
-
+		req, err := http.NewRequestWithContext(ctx, "PUT", requestURL, bytes.NewReader(reqData))
 		if err != nil {
 			return nil, fmt.Errorf("op: %s, plugin: %s, err:  %w", op, plugin, err)
 		}
@@ -174,22 +179,23 @@ func (client *RPCClient) Call(plugin, op string, data any) (any, error) {
 
 		resp, err := client.HTTPClient.Do(req)
 		if err != nil {
+			klog.Errorf("failed to call plugin, err: %v", err)
 			return nil, fmt.Errorf("op: %s, plugin: %s, err:  %w", op, plugin, err)
 		}
 
+		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("%v", resp.Body)
+			return nil, fmt.Errorf("%v", body)
 		}
 
 		if resp.StatusCode == http.StatusOK {
 			// Ensure data is a map
-
-			body, _ := io.ReadAll(resp.Body)
 			var m map[string]any
 
 			if err := json.Unmarshal(body, &m); err != nil {
+				klog.Errorf("failed to unmarshal plugin, err: %v", err)
 				return nil, fmt.Errorf("unmarshal: %w", err)
 			}
 
@@ -244,6 +250,8 @@ func (client *RPCClient) getVolume(lvolID string) (*LvolResp, error) {
 	if err := json.Unmarshal(respBytes, &result); err != nil {
 		return nil, fmt.Errorf("invalid or empty response")
 	}
+
+	klog.V(5).Info("getVolume result", result)
 
 	return result, nil
 }

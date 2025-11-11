@@ -36,8 +36,11 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	mgxClient, err := util.NewMGXClient()
 	if err != nil {
+		klog.Errorf("failed to init mgxClient, err: %v", err)
 		return nil, err
 	}
+
+	klog.Infof("mgxClient is created..")
 
 	csiVolume, err := cs.createVolume(ctx, req, mgxClient)
 	if err != nil {
@@ -51,6 +54,8 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		_ = cs.deleteVolume(csiVolume.GetVolumeId(), mgxClient)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+
+	klog.Infof("volume is published: volumeInfo: %v", volumeInfo)
 
 	// copy volume info. node needs these info to contact target(ip, port, nqn, ...)
 	if csiVolume.VolumeContext == nil {

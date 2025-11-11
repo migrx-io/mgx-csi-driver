@@ -123,6 +123,12 @@ kind-load: docker-build
 	@echo === load to kind
 	@$(TOOL_DIR)/kind load docker-image $(CSI_IMAGE_REGISTRY)/mgx-csi-driver:latest --name $(KIND_CLUSTER_NAME)
 
+
+.PHONY: kind-run
+kind-run: kind-load helm-install
+	@echo === get controller logs
+	@echo 'kubectl logs -f -n mgx-csi-driver mgxcsi-controller-0 -c mgxcsi-controller'
+
 # e2e test
 .PHONY: e2e-test
 # Pass extra arguments to e2e tests. Could be used
