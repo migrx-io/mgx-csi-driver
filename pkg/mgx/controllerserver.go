@@ -48,6 +48,8 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
+	klog.Infof("volume is created: csiVolume: %v", csiVolume)
+
 	volumeInfo, err := cs.publishVolume(csiVolume.GetVolumeId(), mgxClient)
 	if err != nil {
 		klog.Errorf("failed to publish volume, volumeID: %s err: %v", volumeID, err)
