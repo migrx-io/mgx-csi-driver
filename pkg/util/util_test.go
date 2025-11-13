@@ -89,3 +89,40 @@ func TestVolumeContext(t *testing.T) {
 		t.Fatalf("CleanUpVolumeContext failed to cleanup volume context stash")
 	}
 }
+
+func TestPvcToVolName(t *testing.T) {
+	tests := []struct {
+		pvc      string
+		expected string
+	}{
+		{"pvc-1234", "vol-"},
+		{"pvc-9a8b7c6d-1234-5678-90ab-cdef12345678", "vol-"},
+	}
+
+	seen := map[string]bool{}
+	for _, tt := range tests {
+		got := util.PvcToVolName(tt.pvc)
+
+		// must start with vol-
+		if len(got) < 5 || got[:4] != "vol-" {
+			t.Errorf("expected prefix 'vol-', got %q", got)
+		}
+
+		// must have exact length of 20 (NVMe limit)
+		if len(got) != 20 {
+			t.Errorf("expected length 20, got %d for %q", len(got), got)
+		}
+
+		// must be deterministic
+		got2 := util.PvcToVolName(tt.pvc)
+		if got != got2 {
+			t.Errorf("non-deterministic: %q vs %q", got, got2)
+		}
+
+		// must be unique across different PVCs
+		if seen[got] {
+			t.Errorf("duplicate hash found for %q: %q", tt.pvc, got)
+		}
+		seen[got] = true
+	}
+}

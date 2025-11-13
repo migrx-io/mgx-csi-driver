@@ -12,6 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"crypto/sha256"
+	"encoding/hex"
+
 	"k8s.io/klog"
 )
 
@@ -242,4 +245,13 @@ func LookupVolumeContext(path string) (map[string]string, error) {
 // CleanUpVolumeContext cleans up any stashed volume context at passed in path.
 func CleanUpVolumeContext(path string) error {
 	return cleanUpContext(path, volumeContextFileName)
+}
+
+func PvcToVolName(pvc string) string {
+	// Hash the pvc name to create a consistent unique ID
+	h := sha256.New()
+	h.Write([]byte(pvc))
+	hash := hex.EncodeToString(h.Sum(nil))
+
+	return fmt.Sprintf("vol-%s", hash[:16])
 }

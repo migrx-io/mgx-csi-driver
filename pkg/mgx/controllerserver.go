@@ -30,7 +30,7 @@ type mgxSnapshot struct {
 
 // CreateVolume creates a new volume in the SimplyBlock storage system.
 func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
-	volumeID := req.GetName()
+	volumeID := util.PvcToVolName(req.GetName())
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
 
@@ -50,10 +50,10 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	klog.Infof("volume is created: csiVolume: %v", csiVolume)
 
-	volumeInfo, err := cs.publishVolume(csiVolume.GetVolumeId(), mgxClient)
+	volumeInfo, err := cs.publishVolume(volumeID, mgxClient)
 	if err != nil {
 		klog.Errorf("failed to publish volume, volumeID: %s err: %v", volumeID, err)
-		_ = cs.deleteVolume(csiVolume.GetVolumeId(), mgxClient)
+		_ = cs.deleteVolume(volumeID, mgxClient)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -72,7 +72,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 }
 
 func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
-	volumeID := req.GetVolumeId()
+	volumeID := util.PvcToVolName(req.GetVolumeId())
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
 
@@ -118,7 +118,7 @@ func (cs *controllerServer) ValidateVolumeCapabilities(_ context.Context, req *c
 }
 
 func (cs *controllerServer) CreateSnapshot(_ context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
-	volumeID := req.GetSourceVolumeId()
+	volumeID := util.PvcToVolName(req.GetSourceVolumeId())
 	klog.Infof("CreateSnapshot : volumeID=%s", volumeID)
 
 	unlock := cs.volumeLocks.Lock(volumeID)
@@ -244,7 +244,7 @@ func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, siz
 	}
 
 	createVolReq := util.CreateLVolData{
-		Name:                 req.GetName(),
+		Name:                 util.PvcToVolName(req.GetName()),
 		Size:                 sizeMiB,
 		Config:               params["config"],
 		Labels:               params["labels"],
@@ -286,7 +286,7 @@ func (cs *controllerServer) createVolume(ctx context.Context, req *csi.CreateVol
 
 	klog.V(5).Info("provisioning volume from mgx..")
 
-	existingVolume, err := cs.getExistingVolume(req.GetName(), mgxClient, &vol)
+	existingVolume, err := cs.getExistingVolume(util.PvcToVolName(req.GetName()), mgxClient, &vol)
 	if err == nil {
 		return existingVolume, nil
 	}
@@ -350,7 +350,7 @@ func (*controllerServer) unpublishVolume(volumeID string, mgxClient *util.NodeNV
 }
 
 func (*controllerServer) ControllerExpandVolume(_ context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
-	volumeID := req.GetVolumeId()
+	volumeID := util.PvcToVolName(req.GetVolumeId())
 	updatedSize := req.GetCapacityRange().GetRequiredBytes()
 
 	mgxVol := getMGXVol(volumeID)
@@ -373,7 +373,8 @@ func (*controllerServer) ControllerExpandVolume(_ context.Context, req *csi.Cont
 }
 
 func (cs *controllerServer) ControllerGetVolume(_ context.Context, req *csi.ControllerGetVolumeRequest) (*csi.ControllerGetVolumeResponse, error) {
-	volumeID := req.GetVolumeId()
+	volumeID := util.PvcToVolName(req.GetVolumeId())
+
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
 
