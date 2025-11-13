@@ -37,7 +37,7 @@ func ParseJSONFile(fileName string, result any) error {
 }
 
 // round up bytes to megabytes
-func ToMiB(bytes int64) int64 {
+func RoundToMiB(bytes int64) int64 {
 	const mi = 1024 * 1024
 	return (bytes + mi - 1) / mi
 }

@@ -4,13 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"k8s.io/klog"
+)
+
+var (
+	ErrNotFound = errors.New("not found")
 )
 
 // CreateLVolData is the data structure for creating a logical volume
@@ -201,6 +207,11 @@ func (client *RPCClient) Call(plugin, op string, data any) (any, error) {
 
 			// status == 200 -> check "error" field in JSON body
 			if errVal, exists := m["error"]; exists && errVal != nil {
+				// check if it's not found error
+				if errorMatches(errVal.(string), ErrNotFound) {
+					return nil, ErrNotFound
+				}
+
 				return nil, fmt.Errorf("%v", errVal)
 			}
 
@@ -215,15 +226,15 @@ func (client *RPCClient) Call(plugin, op string, data any) (any, error) {
 	return nil, fmt.Errorf("no nodes available")
 }
 
-func (client *RPCClient) createVolume(params *CreateLVolData) (string, error) {
+func (client *RPCClient) createVolume(params *CreateLVolData) error {
 	klog.V(5).Info("createVolume", params)
 
 	_, err := client.Call("storage", "volume_create", params)
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	return params.Name, nil
+	return nil
 }
 
 func (*RPCClient) publishVolume(lvolID string) error {
@@ -317,4 +328,12 @@ func isReachable(addr string) bool {
 	}
 	conn.Close()
 	return true
+}
+
+func errorMatches(errString string, err error) bool {
+	if errString == "" {
+		return false
+	}
+	strErr := strings.ToLower(err.Error())
+	return strings.Contains(errString, strErr)
 }

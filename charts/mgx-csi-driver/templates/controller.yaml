@@ -26,7 +26,8 @@ spec:
         - "--v=5"
         - "--csi-address=unix:///csi/csi-provisioner.sock"
         - "--timeout=30s"
-        - "--retry-interval-start=500ms"
+        - "--retry-interval-start=1s"
+        - "--retry-interval-max=3m"
         - "--leader-election=true"
         - "--leader-election-namespace={{ .Release.Namespace }}"
         volumeMounts:

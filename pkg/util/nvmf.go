@@ -28,13 +28,13 @@ func NewNVMf(config *ClusterConfig) *NodeNVMf {
 	}
 }
 
-func (node *NodeNVMf) CreateVolume(params *CreateLVolData) (string, error) {
-	lvolID, err := node.Client.createVolume(params)
+func (node *NodeNVMf) CreateVolume(params *CreateLVolData) error {
+	err := node.Client.createVolume(params)
 	if err != nil {
-		return "", err
+		return err
 	}
-	klog.V(5).Infof("volume created: %s", lvolID)
-	return lvolID, nil
+	klog.V(5).Infof("volume created: %s", params.Name)
+	return nil
 }
 
 func (node *NodeNVMf) PublishVolume(lvolID string) error {

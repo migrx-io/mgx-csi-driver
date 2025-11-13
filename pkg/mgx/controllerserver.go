@@ -2,6 +2,7 @@ package mgx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -34,30 +35,55 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
 
+	var err error
+
 	mgxClient, err := util.NewMGXClient()
 	if err != nil {
 		klog.Errorf("failed to init mgxClient, err: %v", err)
 		return nil, err
 	}
 
-	klog.Infof("mgxClient is created..")
+	klog.V(5).Info("mgxClient is created..")
 
-	csiVolume, err := cs.createVolume(ctx, req, mgxClient)
-	if err != nil {
-		klog.Errorf("failed to create volume, volumeID: %s err: %v", volumeID, err)
+	// check if volume exists and READY
+	volume, err := mgxClient.GetVolume(volumeID)
+
+	if err != nil && !errors.Is(err, util.ErrNotFound) {
+		klog.Errorf("failed to get volume, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	klog.Infof("volume is created: csiVolume: %v", csiVolume)
+	if errors.Is(err, util.ErrNotFound) {
+		klog.V(5).Info("volume doesn't exists", volumeID)
 
+		err = cs.createVolume(ctx, req, mgxClient)
+		if err != nil {
+			klog.Errorf("failed to create volume, volumeID: %s err: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+
+		klog.Infof("volume is creating: %s", volumeID)
+		// reconcile
+		return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s started creating", volumeID))
+	}
+
+	// there is no errors, check is state is READY
+	if volume.Status != "READY" {
+		klog.V(5).Info("volume is not READY", volume)
+		// reconcile
+		return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s is still creating", volumeID))
+	}
+
+	// volume is created and READY
 	volumeInfo, err := cs.publishVolume(volumeID, mgxClient)
 	if err != nil {
 		klog.Errorf("failed to publish volume, volumeID: %s err: %v", volumeID, err)
-		_ = cs.deleteVolume(volumeID, mgxClient)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	klog.Infof("volume is published: volumeInfo: %v", volumeInfo)
+
+	csiVolume := cs.GetCSIVolume(req)
 
 	// copy volume info. node needs these info to contact target(ip, port, nqn, ...)
 	if csiVolume.VolumeContext == nil {
@@ -81,6 +107,28 @@ func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 		return nil, err
 	}
 
+	klog.V(5).Info("mgxClient is created..")
+
+	// check if volume exists and DELETED
+	volume, err := mgxClient.GetVolume(volumeID)
+
+	if err != nil && !errors.Is(err, util.ErrNotFound) {
+		klog.Errorf("failed to get volume, volumeID: %s err: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	if errors.Is(err, util.ErrNotFound) {
+		klog.V(5).Info("volume is not found", volume)
+		return &csi.DeleteVolumeResponse{}, nil
+	}
+
+	// there is no errors, check is state is READY
+	if volume.Status == "DELETED" {
+		klog.V(5).Info("volume is DELETED", volume)
+		// reconcile
+		return &csi.DeleteVolumeResponse{}, nil
+	}
+
 	// no harm if volume already unpublished
 	err = cs.unpublishVolume(volumeID, mgxClient)
 	if err != nil {
@@ -93,7 +141,7 @@ func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 		return nil, err
 	}
 
-	return &csi.DeleteVolumeResponse{}, nil
+	return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s is still deleting", volumeID))
 }
 
 func (cs *controllerServer) ValidateVolumeCapabilities(_ context.Context, req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {
@@ -259,53 +307,44 @@ func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, siz
 	return &createVolReq, nil
 }
 
-func (*controllerServer) getExistingVolume(name string, mgxClient *util.NodeNVMf, vol *csi.Volume) (*csi.Volume, error) {
-	volume, err := mgxClient.GetVolume(name)
-	if err == nil {
-		vol.VolumeId = volume.Name
-		klog.V(5).Info("volume already exists", vol.GetVolumeId())
-		return vol, nil
-	}
-	return nil, err
-}
-
-func (cs *controllerServer) createVolume(ctx context.Context, req *csi.CreateVolumeRequest, mgxClient *util.NodeNVMf) (*csi.Volume, error) {
+func (*controllerServer) GetCSIVolume(req *csi.CreateVolumeRequest) *csi.Volume {
 	size := req.GetCapacityRange().GetRequiredBytes()
+
 	if size == 0 {
 		klog.Warningln("invalid volume size, resize to 1G")
 		size = 1024 * 1024 * 1024
 	}
 
-	sizeMiB := util.ToMiB(size)
+	sizeRounded := util.RoundToMiB(size)
 
 	vol := csi.Volume{
-		CapacityBytes: sizeMiB * 1024 * 1024,
+		CapacityBytes: sizeRounded,
 		VolumeContext: req.GetParameters(),
 		ContentSource: req.GetVolumeContentSource(),
 	}
 
-	klog.V(5).Info("provisioning volume from mgx..")
+	vol.VolumeId = util.PvcToVolName(req.GetName())
 
-	existingVolume, err := cs.getExistingVolume(util.PvcToVolName(req.GetName()), mgxClient, &vol)
-	if err == nil {
-		return existingVolume, nil
-	}
+	return &vol
+}
+
+func (cs *controllerServer) createVolume(ctx context.Context, req *csi.CreateVolumeRequest, mgxClient *util.NodeNVMf) error {
+	vol := cs.GetCSIVolume(req)
+	sizeMiB := vol.CapacityBytes * 1024 * 1024
 
 	createVolReq, err := prepareCreateVolumeReq(ctx, req, sizeMiB)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	volumeID, err := mgxClient.CreateVolume(createVolReq)
+	err = mgxClient.CreateVolume(createVolReq)
 	if err != nil {
 		klog.Errorf("error creating mgx volume: %v", err)
-		return nil, err
+		return err
 	}
+	klog.V(5).Info("successfully created volume from mgx with Volume ID: ", vol.VolumeId)
 
-	vol.VolumeId = volumeID
-	klog.V(5).Info("successfully created volume from mgx with Volume ID: ", vol.GetVolumeId())
-
-	return &vol, nil
+	return nil
 }
 
 func getMGXVol(csiVolumeID string) *mgxVolume {
