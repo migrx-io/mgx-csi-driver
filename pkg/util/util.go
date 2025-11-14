@@ -42,6 +42,11 @@ func RoundToMiB(bytes int64) int64 {
 	return (bytes + mi - 1) / mi
 }
 
+func BytesToMB(b int64) int64 {
+	const mb = int64(1024 * 1024)
+	return b / mb
+}
+
 // ${env:-def}
 func FromEnv(env, def string) string {
 	s := os.Getenv(env)

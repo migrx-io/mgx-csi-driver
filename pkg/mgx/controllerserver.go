@@ -325,7 +325,8 @@ func (*controllerServer) GetCSIVolume(req *csi.CreateVolumeRequest) *csi.Volume 
 
 func (cs *controllerServer) createVolume(ctx context.Context, req *csi.CreateVolumeRequest, mgxClient *util.NodeNVMf) error {
 	vol := cs.GetCSIVolume(req)
-	sizeMiB := vol.CapacityBytes * 1024 * 1024
+
+	sizeMiB := util.BytesToMB(vol.CapacityBytes)
 
 	createVolReq, err := prepareCreateVolumeReq(ctx, req, sizeMiB)
 	if err != nil {
