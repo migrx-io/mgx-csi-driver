@@ -39,7 +39,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	mgxClient, err := util.NewMGXClient()
 	if err != nil {
-		klog.Errorf("failed to init mgxClient, err: %v", err)
+		klog.Errorf("failed to init mgxClient, err: %s", err)
 		return nil, err
 	}
 
@@ -49,7 +49,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	volume, err := mgxClient.GetVolume(volumeID)
 
 	if err != nil && !errors.Is(err, util.ErrNotFound) {
-		klog.Errorf("failed to get volume, volumeID: %s err: %v", volumeID, err)
+		klog.Errorf("failed to get volume, volumeID: %s err: %s", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -58,7 +58,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 		err = cs.createVolume(ctx, req, mgxClient)
 		if err != nil {
-			klog.Errorf("failed to create volume, volumeID: %s err: %v", volumeID, err)
+			klog.Errorf("failed to create volume, volumeID: %s err: %s", volumeID, err)
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 
@@ -77,7 +77,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	// volume is created and READY
 	volumeInfo, err := cs.publishVolume(volumeID, mgxClient)
 	if err != nil {
-		klog.Errorf("failed to publish volume, volumeID: %s err: %v", volumeID, err)
+		klog.Errorf("failed to publish volume, volumeID: %s err: %s", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -113,7 +113,7 @@ func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 	volume, err := mgxClient.GetVolume(volumeID)
 
 	if err != nil && !errors.Is(err, util.ErrNotFound) {
-		klog.Errorf("failed to get volume, volumeID: %s err: %v", volumeID, err)
+		klog.Errorf("failed to get volume, volumeID: %s err: %s", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -178,21 +178,21 @@ func (cs *controllerServer) CreateSnapshot(_ context.Context, req *csi.CreateSna
 
 	mgxClient, err := util.NewMGXClient()
 	if err != nil {
-		klog.Errorf("failed to create mgx client: %v", err)
+		klog.Errorf("failed to create mgx client: %s", err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	snapshotID, err := mgxClient.CreateSnapshot(mgxVol.lvolID, snapshotName)
 	klog.Infof("CreateSnapshot : snapshotID: %s", snapshotID)
 	if err != nil {
-		klog.Errorf("failed to create snapshot, volumeID: %s snapshotName: %s err: %v", volumeID, snapshotName, err)
+		klog.Errorf("failed to create snapshot, volumeID: %s snapshotName: %s err: %s", volumeID, snapshotName, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	volSize, err := mgxClient.GetVolumeSize(mgxVol.lvolID)
 	klog.Infof("CreateSnapshot : volSize: %d", volSize)
 	if err != nil {
-		klog.Errorf("failed to get volume info, volumeID: %s err: %v", volumeID, err)
+		klog.Errorf("failed to get volume info, volumeID: %s err: %s", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -216,7 +216,7 @@ func (cs *controllerServer) DeleteSnapshot(_ context.Context, req *csi.DeleteSna
 
 	mgxClient, err := util.NewMGXClient()
 	if err != nil {
-		klog.Errorf("failed to create mgx client: %v", err)
+		klog.Errorf("failed to create mgx client: %s", err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -227,7 +227,7 @@ func (cs *controllerServer) DeleteSnapshot(_ context.Context, req *csi.DeleteSna
 
 	err = mgxClient.DeleteSnapshot(mgxSnapshot.snapshotID)
 	if err != nil {
-		klog.Errorf("failed to delete snapshot, snapshotID: %s err: %v", csiSnapshotID, err)
+		klog.Errorf("failed to delete snapshot, snapshotID: %s err: %s", csiSnapshotID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -423,7 +423,7 @@ func (cs *controllerServer) ControllerGetVolume(_ context.Context, req *csi.Cont
 
 	volumeInfo, err := mgxClient.VolumeInfo(mgxVol.lvolID)
 	if err != nil {
-		klog.Errorf("failed to get mgxVol for %s: %v", volumeID, err)
+		klog.Errorf("failed to get mgxVol for %s: %s", volumeID, err)
 
 		return &csi.ControllerGetVolumeResponse{
 			Volume: &csi.Volume{
