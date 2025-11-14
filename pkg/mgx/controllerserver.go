@@ -54,7 +54,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	if errors.Is(err, util.ErrNotFound) {
-		klog.V(5).Info("volume doesn't exists", volumeID)
+		klog.V(5).Infof("volume doesn't exists: %s", volumeID)
 
 		err = cs.createVolume(ctx, req, mgxClient)
 		if err != nil {
@@ -69,7 +69,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	// there is no errors, check is state is READY
 	if volume.Status != "READY" {
-		klog.V(5).Info("volume is not READY", volume)
+		klog.V(5).Infof("volume: %v is not READY", volume)
 		// reconcile
 		return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s is still creating", volumeID))
 	}
@@ -118,13 +118,13 @@ func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 	}
 
 	if errors.Is(err, util.ErrNotFound) {
-		klog.V(5).Info("volume is not found", volume)
+		klog.V(5).Infof("volume is not found: %v", volume)
 		return &csi.DeleteVolumeResponse{}, nil
 	}
 
 	// there is no errors, check is state is READY
 	if volume.Status == "DELETED" {
-		klog.V(5).Info("volume is DELETED", volume)
+		klog.V(5).Infof("volume is DELETED: %v", volume)
 		// reconcile
 		return &csi.DeleteVolumeResponse{}, nil
 	}
@@ -310,11 +310,6 @@ func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, siz
 func (*controllerServer) GetCSIVolume(req *csi.CreateVolumeRequest) *csi.Volume {
 	size := req.GetCapacityRange().GetRequiredBytes()
 
-	if size == 0 {
-		klog.Warningln("invalid volume size, resize to 1G")
-		size = 1024 * 1024 * 1024
-	}
-
 	sizeRounded := util.RoundToMiB(size)
 
 	vol := csi.Volume{
@@ -342,7 +337,7 @@ func (cs *controllerServer) createVolume(ctx context.Context, req *csi.CreateVol
 		klog.Errorf("error creating mgx volume: %v", err)
 		return err
 	}
-	klog.V(5).Info("successfully created volume from mgx with Volume ID: ", vol.VolumeId)
+	klog.V(5).Infof("successfully created volume from mgx with VolumeID: %s", vol.VolumeId)
 
 	return nil
 }

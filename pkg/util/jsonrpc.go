@@ -106,8 +106,7 @@ func (client *RPCClient) Authenticate(host string) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	c := &http.Client{}
-	resp, err := c.Do(req)
+	resp, err := client.HTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
@@ -185,7 +184,7 @@ func (client *RPCClient) Call(plugin, op string, data any) (any, error) {
 
 		resp, err := client.HTTPClient.Do(req)
 		if err != nil {
-			klog.Errorf("failed to call plugin, err: %v", err)
+			klog.Errorf("failed to call plugin, err: %v, resp: %v", err, resp)
 			return nil, fmt.Errorf("op: %s, plugin: %s, err:  %w", op, plugin, err)
 		}
 
@@ -227,7 +226,7 @@ func (client *RPCClient) Call(plugin, op string, data any) (any, error) {
 }
 
 func (client *RPCClient) createVolume(params *CreateLVolData) error {
-	klog.V(5).Info("createVolume", params)
+	klog.V(5).Infof("createVolume, params: %v", params)
 
 	_, err := client.Call("storage", "volume_create", params)
 	if err != nil {
@@ -238,7 +237,7 @@ func (client *RPCClient) createVolume(params *CreateLVolData) error {
 }
 
 func (*RPCClient) publishVolume(lvolID string) error {
-	klog.V(5).Info("publishVolume", lvolID)
+	klog.V(5).Infof("publishVolume: %s", lvolID)
 
 	return nil
 }
@@ -248,7 +247,7 @@ func (client *RPCClient) getVolume(lvolID string) (*LvolResp, error) {
 		"name": lvolID,
 	}
 
-	klog.V(5).Info("getVolume", &params)
+	klog.V(5).Infof("getVolume, params: %v", &params)
 
 	out, err := client.Call("storage", "volume_show", &params)
 	if err != nil {
@@ -262,7 +261,7 @@ func (client *RPCClient) getVolume(lvolID string) (*LvolResp, error) {
 		return nil, fmt.Errorf("invalid or empty response")
 	}
 
-	klog.V(5).Info("getVolume result", result)
+	klog.V(5).Infof("getVolume result: %v", result)
 
 	return result, nil
 }
@@ -272,7 +271,7 @@ func (client *RPCClient) deleteVolume(lvolID string) error {
 		"name": lvolID,
 	}
 
-	klog.V(5).Info("deleteVolume", &params)
+	klog.V(5).Infof("deleteVolume: %v", &params)
 
 	_, err := client.Call("storage", "volume_del", &params)
 	if err != nil {
@@ -283,7 +282,7 @@ func (client *RPCClient) deleteVolume(lvolID string) error {
 }
 
 func (*RPCClient) resizeVolume(lvolID string, size int64) (bool, error) {
-	klog.V(5).Info("resizeVolume", lvolID, size)
+	klog.V(5).Infof("resizeVolume: %s, size: %d", lvolID, size)
 
 	return false, nil
 }
@@ -299,19 +298,19 @@ func (*RPCClient) listSnapshots() ([]*SnapshotResp, error) {
 func (*RPCClient) createSnapshot(lvolID, snapShotName string) (string, error) { //nolint:unparam // placeholder for future error handling
 	var snapshotID string
 
-	klog.V(5).Info("createSnapshot", lvolID, snapShotName)
+	klog.V(5).Infof("createSnapshot: %s, %s", lvolID, snapShotName)
 
 	return snapshotID, nil
 }
 
 func (*RPCClient) deleteSnapshot(snapshotID string) error {
-	klog.V(5).Info("deleteSnapshot", snapshotID)
+	klog.V(5).Infof("deleteSnapshot: %s", snapshotID)
 
 	return nil
 }
 
 func (*RPCClient) unpublishVolume(lvolID string) error {
-	klog.V(5).Info("unpublishVolume", lvolID)
+	klog.V(5).Infof("unpublishVolume: %s", lvolID)
 
 	return nil
 }

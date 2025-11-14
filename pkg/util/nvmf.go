@@ -15,13 +15,16 @@ type NodeNVMf struct {
 // NewNVMf creates a new NVMf client
 func NewNVMf(config *ClusterConfig) *NodeNVMf {
 	client := RPCClient{
-		HTTPClient: &http.Client{Timeout: cfgRPCTimeoutSeconds * time.Second},
-		Protocol:   config.Protocol,
-		Nodes:      config.Nodes,
-		Cluster:    config.Cluster,
-		Namespace:  config.Namespace,
-		Username:   config.Username,
-		Password:   config.Password,
+		HTTPClient: &http.Client{
+			Timeout:   cfgRPCTimeoutSeconds * time.Second,
+			Transport: &http.Transport{DisableKeepAlives: true},
+		},
+		Protocol:  config.Protocol,
+		Nodes:     config.Nodes,
+		Cluster:   config.Cluster,
+		Namespace: config.Namespace,
+		Username:  config.Username,
+		Password:  config.Password,
 	}
 	return &NodeNVMf{
 		Client: &client,
