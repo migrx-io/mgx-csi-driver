@@ -310,10 +310,8 @@ func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, siz
 func (*controllerServer) GetCSIVolume(req *csi.CreateVolumeRequest) *csi.Volume {
 	size := req.GetCapacityRange().GetRequiredBytes()
 
-	sizeRounded := util.RoundToMiB(size)
-
 	vol := csi.Volume{
-		CapacityBytes: sizeRounded,
+		CapacityBytes: size,
 		VolumeContext: req.GetParameters(),
 		ContentSource: req.GetVolumeContentSource(),
 	}
@@ -328,10 +326,14 @@ func (cs *controllerServer) createVolume(ctx context.Context, req *csi.CreateVol
 
 	sizeMiB := util.BytesToMB(vol.CapacityBytes)
 
+	klog.V(5).Infof("CreateVolume req: %v, sizeMiB: %d", req, sizeMiB)
+
 	createVolReq, err := prepareCreateVolumeReq(ctx, req, sizeMiB)
 	if err != nil {
 		return err
 	}
+
+	klog.V(5).Infof("CreateVolume VolumeID: %s, createVolReq: %v", vol.VolumeId, createVolReq)
 
 	err = mgxClient.CreateVolume(createVolReq)
 	if err != nil {

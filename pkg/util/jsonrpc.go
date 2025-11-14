@@ -35,10 +35,10 @@ type CreateLVolData struct {
 }
 
 type LvolResp struct {
-	Name   string `json:"nqn"`
+	Name   string `json:"name"`
 	Size   int    `json:"size"`
-	Nqn    string `json:"name"`
-	Port   int    `json:"port"`
+	Nqn    string `json:"nqn"`
+	Port   int    `json:"proxy_port"`
 	IP     string `json:"ip"`
 	Status string `json:"status"`
 	Error  string `json:"error"`

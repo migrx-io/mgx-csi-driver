@@ -36,12 +36,6 @@ func ParseJSONFile(fileName string, result any) error {
 	return json.Unmarshal(bytes, result)
 }
 
-// round up bytes to megabytes
-func RoundToMiB(bytes int64) int64 {
-	const mi = 1024 * 1024
-	return (bytes + mi - 1) / mi
-}
-
 func BytesToMB(b int64) int64 {
 	const mb = int64(1024 * 1024)
 	return b / mb
