@@ -64,14 +64,14 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 		klog.Infof("volume is creating: %s", volumeID)
 		// reconcile
-		return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s started creating", volumeID))
+		return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s is creating", volumeID))
 	}
 
 	// there is no errors, check is state is READY
 	if volume.Status != "READY" {
 		klog.V(5).Infof("volume: %v is not READY", volume)
 		// reconcile
-		return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s is still creating", volumeID))
+		return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s is not READY: %s", volumeID, volume.Status))
 	}
 
 	// volume is created and READY
