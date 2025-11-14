@@ -98,7 +98,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 }
 
 func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
-	volumeID := util.PvcToVolName(req.GetVolumeId())
+	volumeID := req.GetVolumeId()
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
 
