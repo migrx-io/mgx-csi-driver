@@ -89,6 +89,24 @@ func (node *NodeNVMf) DeleteVolume(lvolID string) error {
 	return nil
 }
 
+func (node *NodeNVMf) StopVolume(lvolID string) error {
+	err := node.Client.stopVolume(lvolID)
+	if err != nil {
+		return err
+	}
+	klog.V(5).Infof("volume stop: %s", lvolID)
+	return nil
+}
+
+func (node *NodeNVMf) StartVolume(lvolID string) error {
+	err := node.Client.startVolume(lvolID)
+	if err != nil {
+		return err
+	}
+	klog.V(5).Infof("volume start: %s", lvolID)
+	return nil
+}
+
 func (node *NodeNVMf) ResizeVolume(lvolID string, newSize int64) (bool, error) {
 	return node.Client.resizeVolume(lvolID, newSize)
 }

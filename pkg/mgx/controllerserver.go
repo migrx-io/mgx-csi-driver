@@ -129,6 +129,21 @@ func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 		return &csi.DeleteVolumeResponse{}, nil
 	}
 
+	// if volume is not STOPPED then stop it first
+	if volume.Status != "STOPPED" {
+		klog.V(5).Infof("volume is not STOPPED: %v", volume)
+
+		err = cs.stopVolume(volumeID, mgxClient)
+		if err != nil {
+			klog.Errorf("failed to stop volume, volumeID: %s err: %s", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+
+		klog.Infof("volume is stopping: %s", volumeID)
+		// reconcile
+		return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s is stopping", volumeID))
+	}
+
 	// no harm if volume already unpublished
 	err = cs.unpublishVolume(volumeID, mgxClient)
 	if err != nil {
@@ -379,6 +394,17 @@ func (*controllerServer) deleteVolume(volumeID string, mgxClient *util.NodeNVMf)
 
 	return mgxClient.DeleteVolume(mgxVol.lvolID)
 }
+
+func (*controllerServer) stopVolume(volumeID string, mgxClient *util.NodeNVMf) error {
+	mgxVol := getMGXVol(volumeID)
+
+	return mgxClient.StopVolume(mgxVol.lvolID)
+}
+
+// func (*controllerServer) startVolume(volumeID string, mgxClient *util.NodeNVMf) error {
+//	mgxVol := getMGXVol(volumeID)
+//	return mgxClient.StartVolume(mgxVol.lvolID)
+//}
 
 func (*controllerServer) unpublishVolume(volumeID string, mgxClient *util.NodeNVMf) error {
 	mgxVol := getMGXVol(volumeID)

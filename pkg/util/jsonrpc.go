@@ -281,6 +281,36 @@ func (client *RPCClient) deleteVolume(lvolID string) error {
 	return err
 }
 
+func (client *RPCClient) stopVolume(lvolID string) error {
+	params := map[string]any{
+		"name": lvolID,
+	}
+
+	klog.V(5).Infof("stopVolume: %v", &params)
+
+	_, err := client.Call("storage", "volume_stop", &params)
+	if err != nil {
+		return err
+	}
+
+	return err
+}
+
+func (client *RPCClient) startVolume(lvolID string) error {
+	params := map[string]any{
+		"name": lvolID,
+	}
+
+	klog.V(5).Infof("stopVolume: %v", &params)
+
+	_, err := client.Call("storage", "volume_start", &params)
+	if err != nil {
+		return err
+	}
+
+	return err
+}
+
 func (*RPCClient) resizeVolume(lvolID string, size int64) (bool, error) {
 	klog.V(5).Infof("resizeVolume: %s, size: %d", lvolID, size)
 
