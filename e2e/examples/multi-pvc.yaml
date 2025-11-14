@@ -5,12 +5,11 @@ metadata:
   name: mgxcsi-pvc1
 spec:
   accessModes:
-  - ReadWriteOnce
+    - ReadWriteOnce
   resources:
     requests:
-      storage: 128Mi
+      storage: 1Gi
   storageClassName: mgxcsi-sc
-
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -18,12 +17,11 @@ metadata:
   name: mgxcsi-pvc2
 spec:
   accessModes:
-  - ReadWriteOnce
+    - ReadWriteOnce
   resources:
     requests:
-      storage: 128Mi
+      storage: 1Gi
   storageClassName: mgxcsi-sc
-
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -31,8 +29,8 @@ metadata:
   name: mgxcsi-pvc3
 spec:
   accessModes:
-  - ReadWriteOnce
+    - ReadWriteOnce
   resources:
     requests:
-      storage: 128Mi
+      storage: 1Gi
   storageClassName: mgxcsi-sc
