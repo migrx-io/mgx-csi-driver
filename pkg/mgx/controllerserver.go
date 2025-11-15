@@ -401,10 +401,17 @@ func (*controllerServer) stopVolume(volumeID string, mgxClient *util.NodeNVMf) e
 	return mgxClient.StopVolume(mgxVol.lvolID)
 }
 
-// func (*controllerServer) startVolume(volumeID string, mgxClient *util.NodeNVMf) error {
-//	mgxVol := getMGXVol(volumeID)
-//	return mgxClient.StartVolume(mgxVol.lvolID)
-//}
+func (*controllerServer) startVolume(volumeID string, mgxClient *util.NodeNVMf) error {
+	mgxVol := getMGXVol(volumeID)
+
+	return mgxClient.StartVolume(mgxVol.lvolID)
+}
+
+func (*controllerServer) resizeVolume(volumeID string, mgxClient *util.NodeNVMf, updatedSize int64) error {
+	mgxVol := getMGXVol(volumeID)
+
+	return mgxClient.ResizeVolume(mgxVol.lvolID, updatedSize)
+}
 
 func (*controllerServer) unpublishVolume(volumeID string, mgxClient *util.NodeNVMf) error {
 	mgxVol := getMGXVol(volumeID)
@@ -412,22 +419,74 @@ func (*controllerServer) unpublishVolume(volumeID string, mgxClient *util.NodeNV
 	return mgxClient.UnpublishVolume(mgxVol.lvolID)
 }
 
-func (*controllerServer) ControllerExpandVolume(_ context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
-	volumeID := util.PvcToVolName(req.GetVolumeId())
-	updatedSize := req.GetCapacityRange().GetRequiredBytes()
-
-	mgxVol := getMGXVol(volumeID)
+func (cs *controllerServer) ControllerExpandVolume(_ context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
+	volumeID := req.GetVolumeId()
+	updatedSize := util.BytesToMB(req.GetCapacityRange().GetRequiredBytes())
 
 	mgxClient, err := util.NewMGXClient()
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = mgxClient.ResizeVolume(mgxVol.lvolID, updatedSize)
-	if err != nil {
-		klog.Errorf("failed to resize vol, LVolID: %s err: %v", mgxVol.lvolID, err)
-		return nil, err
+	klog.V(5).Info("mgxClient is created..")
+
+	// check if volume exists and READY
+	volume, err := mgxClient.GetVolume(volumeID)
+
+	if err != nil && !errors.Is(err, util.ErrNotFound) {
+		klog.Errorf("failed to get volume, volumeID: %s err: %s", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
 	}
+
+	if errors.Is(err, util.ErrNotFound) {
+		klog.Errorf("volume is not found: %v", volume)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	// check if size is changed than means node was resized and stopped before
+	// and we just need to start it exit
+
+	if int64(volume.Size) != updatedSize {
+		klog.V(5).Infof("start resizing: %v", volume)
+
+		if volume.Status != "STOPPED" {
+			klog.V(5).Info("stop volume before resizing..")
+
+			err = cs.stopVolume(volumeID, mgxClient)
+			if err != nil {
+				klog.Errorf("failed to stop volume, volumeID: %s err: %s", volumeID, err)
+				return nil, status.Error(codes.Internal, err.Error())
+			}
+
+			// reconcile
+			return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s is stopping", volumeID))
+		}
+		// volume STOPPED then resize it
+		err = cs.resizeVolume(volumeID, mgxClient, updatedSize)
+		if err != nil {
+			klog.Errorf("failed to resize volume, volumeID: %s err: %s", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+
+		// reconcile
+		return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s resized", volumeID))
+	}
+
+	// there is no errors, check is state is READY
+	if volume.Status != "READY" {
+		klog.V(5).Infof("volume is not READY: %v", volume)
+		// reconcile
+		err = cs.startVolume(volumeID, mgxClient)
+		if err != nil {
+			klog.Errorf("failed to start volume, volumeID: %s err: %s", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+
+		// reconcile
+		return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s is not READY", volumeID))
+	}
+
+	klog.V(5).Infof("volume is resized: %v", volume)
 
 	return &csi.ControllerExpandVolumeResponse{
 		CapacityBytes:         updatedSize,
@@ -436,7 +495,7 @@ func (*controllerServer) ControllerExpandVolume(_ context.Context, req *csi.Cont
 }
 
 func (cs *controllerServer) ControllerGetVolume(_ context.Context, req *csi.ControllerGetVolumeRequest) (*csi.ControllerGetVolumeResponse, error) {
-	volumeID := util.PvcToVolName(req.GetVolumeId())
+	volumeID := req.GetVolumeId()
 
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()

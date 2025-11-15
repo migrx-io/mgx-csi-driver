@@ -311,10 +311,20 @@ func (client *RPCClient) startVolume(lvolID string) error {
 	return err
 }
 
-func (*RPCClient) resizeVolume(lvolID string, size int64) (bool, error) {
-	klog.V(5).Infof("resizeVolume: %s, size: %d", lvolID, size)
+func (client *RPCClient) resizeVolume(lvolID string, updatedSize int64) error {
+	params := map[string]any{
+		"name": lvolID,
+		"size": updatedSize,
+	}
 
-	return false, nil
+	klog.V(5).Infof("resizeVolume: %v", &params)
+
+	_, err := client.Call("storage", "volume_resize", &params)
+	if err != nil {
+		return err
+	}
+
+	return err
 }
 
 func (*RPCClient) listSnapshots() ([]*SnapshotResp, error) {
