@@ -192,7 +192,7 @@ func (client *RPCClient) Call(plugin, op string, data any) (any, error) {
 		resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("%v", body)
+			return nil, fmt.Errorf("plugin call code: %d, error: %s", resp.StatusCode, string(body))
 		}
 
 		if resp.StatusCode == http.StatusOK {
