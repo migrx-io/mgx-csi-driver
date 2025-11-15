@@ -33,6 +33,20 @@ spec:
         volumeMounts:
         - name: socket-dir
           mountPath: /csi
+      - name: mgxcsi-resizer
+        image: "{{ .Values.image.csiResizer.repository }}:{{ .Values.image.csiResizer.tag }}"
+        imagePullPolicy: {{ .Values.image.csiResizer.pullPolicy }}
+        args:
+        - "--v=5"
+        - "--csi-address=unix:///csi/csi-provisioner.sock"
+        - "--timeout=30s"
+        - "--retry-interval-start=1s"
+        - "--retry-interval-max=30s"
+        - "--leader-election=true"
+        - "--leader-election-namespace={{ .Release.Namespace }}"
+        volumeMounts:
+        - name: socket-dir
+          mountPath: /csi
       - name: mgxcsi-controller
         image: "{{ .Values.image.mgxcsi.repository }}:{{ .Values.image.mgxcsi.tag }}"
         imagePullPolicy: {{ .Values.image.mgxcsi.pullPolicy }}
