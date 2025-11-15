@@ -17,5 +17,5 @@ parameters:
   storage_compress: "0"
 reclaimPolicy: Delete
 volumeBindingMode: Immediate
-allowVolumeExpansion: false
+allowVolumeExpansion: true
 {{- end -}}
