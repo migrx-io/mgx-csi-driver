@@ -128,6 +128,7 @@ kind-load: docker-build
 kind-run: kind-load helm-install
 	@echo === get controller logs
 	@echo 'kubectl logs -f -n mgx-csi-driver mgxcsi-controller-0 -c mgxcsi-controller'
+	@echo 'kubectl logs -n mgx-csi-driver mgxcsi-node-<...> -c mgxcsi-node'
 
 # e2e test
 .PHONY: e2e-test
