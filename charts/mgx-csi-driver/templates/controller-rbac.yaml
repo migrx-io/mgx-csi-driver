@@ -50,6 +50,22 @@ rules:
   verbs: ["get", "watch", "list", "delete", "update", "create"]
 
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mgxcsi-resizer-role
+rules:
+- apiGroups: [""]
+  resources: ["pods", "persistentvolumes", "persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims/status"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get", "list", "watch"]
+
+---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
@@ -61,5 +77,18 @@ subjects:
 roleRef:
   kind: ClusterRole
   name: mgxcsi-provisioner-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mgxcsi-resizer-binding
+subjects:
+- kind: ServiceAccount
+  name: mgxcsi-controller-sa
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: mgxcsi-resizer-role
   apiGroup: rbac.authorization.k8s.io
 {{- end -}}

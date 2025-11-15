@@ -49,7 +49,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	volume, err := mgxClient.GetVolume(volumeID)
 
 	if err != nil && !errors.Is(err, util.ErrNotFound) {
-		klog.Errorf("failed to get volume, volumeID: %s err: %s", volumeID, err)
+		klog.Errorf("failed to get volume, volumeID: %s err: %s", volumeID, err.Error())
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -113,7 +113,7 @@ func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 	volume, err := mgxClient.GetVolume(volumeID)
 
 	if err != nil && !errors.Is(err, util.ErrNotFound) {
-		klog.Errorf("failed to get volume, volumeID: %s err: %s", volumeID, err)
+		klog.Errorf("failed to get volume, volumeID: %s err: %s", volumeID, err.Error())
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -135,7 +135,7 @@ func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 
 		err = cs.stopVolume(volumeID, mgxClient)
 		if err != nil {
-			klog.Errorf("failed to stop volume, volumeID: %s err: %s", volumeID, err)
+			klog.Errorf("failed to stop volume, volumeID: %s err: %s", volumeID, err.Error())
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 
@@ -421,7 +421,9 @@ func (*controllerServer) unpublishVolume(volumeID string, mgxClient *util.NodeNV
 
 func (cs *controllerServer) ControllerExpandVolume(_ context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
-	updatedSize := util.BytesToMB(req.GetCapacityRange().GetRequiredBytes())
+
+	newSize := req.GetCapacityRange().GetRequiredBytes()
+	updatedSize := util.BytesToMB(newSize)
 
 	mgxClient, err := util.NewMGXClient()
 	if err != nil {
@@ -434,7 +436,7 @@ func (cs *controllerServer) ControllerExpandVolume(_ context.Context, req *csi.C
 	volume, err := mgxClient.GetVolume(volumeID)
 
 	if err != nil && !errors.Is(err, util.ErrNotFound) {
-		klog.Errorf("failed to get volume, volumeID: %s err: %s", volumeID, err)
+		klog.Errorf("failed to get volume, volumeID: %s err: %s", volumeID, err.Error())
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -464,7 +466,7 @@ func (cs *controllerServer) ControllerExpandVolume(_ context.Context, req *csi.C
 		// volume STOPPED then resize it
 		err = cs.resizeVolume(volumeID, mgxClient, updatedSize)
 		if err != nil {
-			klog.Errorf("failed to resize volume, volumeID: %s err: %s", volumeID, err)
+			klog.Errorf("failed to resize volume, volumeID: %s err: %s", volumeID, err.Error())
 			return nil, status.Error(codes.Internal, err.Error())
 		}
 
@@ -489,7 +491,7 @@ func (cs *controllerServer) ControllerExpandVolume(_ context.Context, req *csi.C
 	klog.V(5).Infof("volume is resized: %v", volume)
 
 	return &csi.ControllerExpandVolumeResponse{
-		CapacityBytes:         updatedSize,
+		CapacityBytes:         newSize,
 		NodeExpansionRequired: true,
 	}, nil
 }
