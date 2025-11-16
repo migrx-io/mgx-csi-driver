@@ -256,28 +256,35 @@ func (ns *nodeServer) stageVolume(devicePath, stagingPath string, req *csi.NodeS
 
 func (ns *nodeServer) createMountPoint(path string) (bool, error) {
 	// Check if the path is already a mount point
-
-	var err error
-
 	isMount, err := ns.mounter.IsMountPoint(path)
-
-	if err == nil {
+	if err != nil {
+		// If the path does not exist, create it
 		if os.IsNotExist(err) {
-			// Path does not exist, create it
-			if mkDirerr := os.MkdirAll(path, 0o755); mkDirerr != nil {
-				return false, mkDirerr
+			if mkErr := os.MkdirAll(path, 0o755); mkErr != nil {
+				return false, mkErr
 			}
-			return false, nil // not mounted yet, but created
+			klog.Infof("Created mount point path: %s", path)
+			return false, nil // path created, not mounted yet
 		}
-		return false, err // other errors
+
+		// Corrupted mount entry — treat as mounted to prevent accidental mount over it.
+		if mount.IsCorruptedMnt(err) {
+			klog.Warningf("Corrupted mount point detected for %s: %v", path, err)
+			return true, nil
+		}
+
+		// Other errors from IsMountPoint
+		klog.Errorf("Error checking mount point %s: %v", path, err)
+		return false, err
 	}
 
+	// No error from IsMountPoint: check result
 	if isMount {
 		klog.Infof("%s already mounted", path)
-		return true, nil // already mounted
+		return true, nil
 	}
 
-	// Path exists but not mounted
+	// Path exists and is not a mount point
 	return false, nil
 }
 
