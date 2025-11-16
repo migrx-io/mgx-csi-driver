@@ -258,7 +258,7 @@ func (ns *nodeServer) publishVolume(_ string, req *csi.NodePublishVolumeRequest)
 	}
 	stagingPath := devicePath
 
-	fsType := ""
+	fsType := "ext4"
 	if err = ns.MakeFile(targetPath); err != nil {
 		if removeErr := os.Remove(targetPath); removeErr != nil {
 			return status.Errorf(codes.Internal, "Could not remove mount target %q: %v", targetPath, removeErr)

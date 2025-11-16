@@ -4,7 +4,7 @@ image:
   mgxcsi:
     repository: migrx/mgx-csi-driver
     tag: latest
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
   csiProvisioner:
     repository: registry.k8s.io/sig-storage/csi-provisioner
     tag: v6.0.0

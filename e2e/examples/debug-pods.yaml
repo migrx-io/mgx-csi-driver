@@ -18,7 +18,7 @@ spec:
   hostNetwork: true
   containers:
   - name: debug
-    image: ubuntu:24.04
+    image: amazonlinux:2023
     command: ["/bin/bash", "-c", "sleep infinity"]
     securityContext:
       privileged: true
