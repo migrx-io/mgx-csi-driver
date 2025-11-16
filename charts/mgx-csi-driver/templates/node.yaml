@@ -16,6 +16,17 @@ spec:
     spec:
       serviceAccount: mgxcsi-node-sa
       hostNetwork: true
+      initContainers:
+      - name: load-nvme-tcp
+        image: "{{ .Values.image.mgxcsi.repository }}:{{ .Values.image.mgxcsi.tag }}" 
+        imagePullPolicy: {{ .Values.image.mgxcsi.pullPolicy }}
+        command: ["modprobe", "nvme-tcp"]
+        securityContext:
+          privileged: true
+        volumeMounts:
+          - name: lib-modules
+            mountPath: /lib/modules
+            readOnly: true
       containers:
       - name: mgxcsi-registrar
         securityContext:
@@ -100,3 +111,8 @@ spec:
       - name: mgxcsi-secret
         secret:
           secretName: mgxcsi-secret
+      - name: lib-modules
+        hostPath:
+          path: /lib/modules
+          type: Directory
+
