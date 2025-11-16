@@ -21,6 +21,7 @@ KIND_VERSION ?= v0.26.0
 KIND_CLUSTER_NAME ?= mgx-cluster
 MGM_API_USERNAME := admin
 MGM_API_PASSWD := admin123
+MGM_ENDPOINT ?= host.docker.internal
 
 # go source, scripts
 SOURCE_DIRS := cmd pkg
@@ -111,7 +112,7 @@ unit-test:
 .PHONY: helm-install
 helm-install: helm-uninstall
 	@echo === install helm
-	@helm install mgx-csi-driver ./charts/mgx-csi-driver --namespace mgx-csi-driver --create-namespace --set csiSecret.clusterConfig.username=$(MGM_API_USERNAME) --set csiSecret.clusterConfig.password=$(MGM_API_PASSWD) --set csiSecret.clusterConfig.nodes={"host.docker.internal:8082"}
+	@helm install mgx-csi-driver ./charts/mgx-csi-driver --namespace mgx-csi-driver --create-namespace --set csiSecret.clusterConfig.username=$(MGM_API_USERNAME) --set csiSecret.clusterConfig.password=$(MGM_API_PASSWD) --set csiSecret.clusterConfig.nodes={"${MGM_ENDPOINT}:8082"}
 
 .PHONY: helm-uninstall
 helm-uninstall:
@@ -126,6 +127,12 @@ kind-load: docker-build
 
 .PHONY: kind-run
 kind-run: kind-load helm-install
+	@echo === get controller logs
+	@echo 'kubectl logs -f -n mgx-csi-driver mgxcsi-controller-0 -c mgxcsi-controller'
+	@echo 'kubectl logs -n mgx-csi-driver mgxcsi-node-<...> -c mgxcsi-node'
+
+.PHONY: eks-run
+eks-run: docker-buildx helm-install
 	@echo === get controller logs
 	@echo 'kubectl logs -f -n mgx-csi-driver mgxcsi-controller-0 -c mgxcsi-controller'
 	@echo 'kubectl logs -n mgx-csi-driver mgxcsi-node-<...> -c mgxcsi-node'

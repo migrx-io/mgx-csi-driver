@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: debug-curl
+spec:
+  containers:
+  - name: curl
+    image: curlimages/curl
+    command: ["sleep", "3600"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: debug-node
+  namespace: kube-system
+spec:
+  hostPID: true
+  hostNetwork: true
+  containers:
+  - name: debug
+    image: ubuntu:24.04
+    command: ["/bin/bash", "-c", "sleep infinity"]
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - mountPath: /dev
+      name: dev
+    - mountPath: /lib/modules
+      name: host-modules
+      readOnly: true
+  volumes:
+  - name: host-modules
+    hostPath:
+      path: /lib/modules
+      type: Directory
+  - name: dev
+    hostPath:
+      path: /dev
