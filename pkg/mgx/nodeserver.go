@@ -2,6 +2,7 @@ package mgx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -78,7 +79,7 @@ func (ns *nodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolum
 			initiator.Disconnect() //nolint:errcheck // ignore error
 		}
 	}()
-	if err = ns.stageVolume(devicePath, stagingTargetPath, req, vc); err != nil { // idempotent
+	if err = ns.stageVolume(devicePath, stagingTargetPath, req); err != nil { // idempotent
 		klog.Errorf("failed to stage volume, volumeID: %s devicePath:%s err: %v", volumeID, devicePath, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -222,10 +223,65 @@ func (*nodeServer) NodeExpandVolume(_ context.Context, req *csi.NodeExpandVolume
 	return &csi.NodeExpandVolumeResponse{}, nil
 }
 
-func (*nodeServer) stageVolume(devicePath, stagingPath string, req *csi.NodeStageVolumeRequest, volumeContext map[string]string) error { //nolint:unparam // placeholder for future error handling
-	klog.Infof("stageVolume: devicePath: %s, stagingPath: %s, req: %v, ctx: %v", devicePath, stagingPath, req, volumeContext)
+func (ns *nodeServer) stageVolume(devicePath, stagingPath string, req *csi.NodeStageVolumeRequest) error {
+	mounted, err := ns.createMountPoint(stagingPath)
+	if err != nil {
+		return err
+	}
+	if mounted {
+		return nil
+	}
 
+	fsType := "ext4"
+	mntFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
+
+	switch req.VolumeCapability.AccessMode.Mode {
+	case csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY,
+		csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY:
+		return errors.New("unsupported MULTI_NODE_MULTI_WRITER AccessMode")
+	case csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER:
+		return errors.New("unsupported MULTI_NODE_MULTI_WRITER AccessMode")
+	case csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER:
+	case csi.VolumeCapability_AccessMode_SINGLE_NODE_MULTI_WRITER:
+	case csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER:
+	case csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER:
+	case csi.VolumeCapability_AccessMode_UNKNOWN:
+	}
+
+	klog.Infof("mount %s to %s, fstype: %s, flags: %v", devicePath, stagingPath, fsType, mntFlags)
+	mounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
+	err = mounter.FormatAndMount(devicePath, stagingPath, fsType, mntFlags)
+	if err != nil {
+		return err
+	}
 	return nil
+}
+
+func (ns *nodeServer) createMountPoint(path string) (bool, error) {
+	// Check if the path is already a mount point
+
+	var err error
+
+	isMount, err := ns.mounter.IsMountPoint(path)
+
+	if err == nil {
+		if os.IsNotExist(err) {
+			// Path does not exist, create it
+			if mkDirerr := os.MkdirAll(path, 0o755); mkDirerr != nil {
+				return false, mkDirerr
+			}
+			return false, nil // not mounted yet, but created
+		}
+		return false, err // other errors
+	}
+
+	if isMount {
+		klog.Infof("%s already mounted", path)
+		return true, nil // already mounted
+	}
+
+	// Path exists but not mounted
+	return false, nil
 }
 
 // isStaged if stagingPath is a mount point, it means it is already staged, and vice versa
