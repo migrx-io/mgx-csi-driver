@@ -3,7 +3,6 @@ package mgx
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -84,7 +83,6 @@ func (ns *nodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolum
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	vc["devicePath"] = devicePath
 	// stash VolumeContext to stagingParentPath (useful during Unstage as it has no
 	// VolumeContext passed to the RPC as per the CSI spec)
 	err = util.StashVolumeContext(req.GetVolumeContext(), stagingParentPath)
@@ -244,7 +242,6 @@ func (ns *nodeServer) stageVolume(devicePath, stagingPath string, req *csi.NodeS
 	case csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER:
 	case csi.VolumeCapability_AccessMode_SINGLE_NODE_MULTI_WRITER:
 	case csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER:
-	case csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER:
 	case csi.VolumeCapability_AccessMode_UNKNOWN:
 	}
 
@@ -301,27 +298,17 @@ func (ns *nodeServer) isStaged(stagingPath string) (bool, error) {
 
 func (ns *nodeServer) publishVolume(_ string, req *csi.NodePublishVolumeRequest) error {
 	targetPath := req.GetTargetPath()
+	stagingPath := getStagingTargetPath(req)
 
-	stagingParentPath := req.GetStagingTargetPath()
-	volumeContext, err := util.LookupVolumeContext(stagingParentPath)
+	mounted, err := ns.createMountPoint(targetPath)
 	if err != nil {
-		return status.Errorf(codes.Internal, "failed to retrieve volume context for volume %s: %v", req.GetVolumeId(), err)
+		return err
 	}
-
-	devicePath, ok := volumeContext["devicePath"]
-	if !ok || devicePath == "" {
-		return status.Errorf(codes.Internal, "could not find device path for volume %s", req.GetVolumeId())
+	if mounted {
+		return nil
 	}
-	stagingPath := devicePath
 
 	fsType := "ext4"
-	if err = ns.MakeFile(targetPath); err != nil {
-		if removeErr := os.Remove(targetPath); removeErr != nil {
-			return status.Errorf(codes.Internal, "Could not remove mount target %q: %v", targetPath, removeErr)
-		}
-		return status.Errorf(codes.Internal, "Could not create file %q: %v", targetPath, err)
-	}
-
 	mntFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
 	mntFlags = append(mntFlags, "bind")
 	klog.Infof("mount %s to %s, fstype: %s, flags: %v", stagingPath, targetPath, fsType, mntFlags)
@@ -351,18 +338,6 @@ func (ns *nodeServer) deleteMountPoint(path string) error {
 		}
 	}
 	return os.RemoveAll(path)
-}
-
-func (*nodeServer) MakeFile(path string) error {
-	// Create file
-	newFile, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0750)
-	if err != nil {
-		return fmt.Errorf("failed to open file %s: %w", path, err)
-	}
-	if err := newFile.Close(); err != nil {
-		return fmt.Errorf("failed to close file %s: %w", path, err)
-	}
-	return nil
 }
 
 func getStagingTargetPath(req any) string {
