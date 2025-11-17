@@ -260,6 +260,34 @@ func getIntParameter(params map[string]string, key string) (int, error) {
 	return 0, nil
 }
 
+func getFloatParameter(params map[string]string, key string) (float64, error) {
+	if valueStr, exists := params[key]; exists {
+		value, err := strconv.ParseFloat(valueStr, 64)
+		if err != nil {
+			return 0, fmt.Errorf("error converting %s: %w", key, err)
+		}
+		return value, nil
+	}
+	return 0, nil
+}
+
+func calculateCacheSize(sizeMiB, minMiB, maxMiB int, ratio float64) int {
+	// multiply sizeMiB by ratio
+	calculated := int(float64(sizeMiB) * ratio)
+
+	// clamp to min
+	if calculated < minMiB {
+		return minMiB
+	}
+
+	// clamp to max
+	if calculated > maxMiB {
+		return maxMiB
+	}
+
+	return calculated
+}
+
 func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, sizeMiB int64) (*util.CreateLVolData, error) {
 	params := req.GetParameters()
 
@@ -279,14 +307,36 @@ func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, siz
 	// calculate cache size based on volume size request
 	//
 
-	cache_r_cache_size, err := getIntParameter(params, "cache_r_cache_size")
+	min_cache_r_cache_size, err := getIntParameter(params, "min_cache_r_cache_size")
 	if err != nil {
 		return nil, err
 	}
-	cache_rw_cache_size, err := getIntParameter(params, "cache_rw_cache_size")
+	min_cache_rw_cache_size, err := getIntParameter(params, "min_cache_rw_cache_size")
 	if err != nil {
 		return nil, err
 	}
+
+	max_cache_r_cache_size, err := getIntParameter(params, "max_cache_r_cache_size")
+	if err != nil {
+		return nil, err
+	}
+	max_cache_rw_cache_size, err := getIntParameter(params, "max_cache_rw_cache_size")
+	if err != nil {
+		return nil, err
+	}
+
+	ratio_cache_r_cache_size, err := getFloatParameter(params, "ratio_cache_r_cache_size")
+	if err != nil {
+		return nil, err
+	}
+	ratio_cache_rw_cache_size, err := getFloatParameter(params, "ratio_cache_rw_cache_size")
+	if err != nil {
+		return nil, err
+	}
+
+	// calc cache size based on cache attributes
+	cache_r_cache_size := calculateCacheSize(int(sizeMiB), min_cache_r_cache_size, max_cache_r_cache_size, ratio_cache_r_cache_size)
+	cache_rw_cache_size := calculateCacheSize(int(sizeMiB), min_cache_rw_cache_size, max_cache_rw_cache_size, ratio_cache_rw_cache_size)
 
 	qos_r_mbytes_per_sec, err := getIntParameter(params, "qos_r_mbytes_per_sec")
 	if err != nil {
@@ -305,8 +355,6 @@ func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, siz
 	if err != nil {
 		return nil, err
 	}
-
-	// calc cache size based on cache attributes
 
 	createVolReq := util.CreateLVolData{
 		Name:                 util.PvcToVolName(req.GetName()),
