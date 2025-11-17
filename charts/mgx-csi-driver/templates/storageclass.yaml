@@ -7,14 +7,19 @@ metadata:
 provisioner: csi.migrx.io
 parameters:
   config: default
-  labels: "pool=pool1,tier=dev"
-  cache_r_cache_size: "4096"
-  cache_rw_cache_size: "1024"
-  qos_r_mbytes_per_sec: "0"
-  qos_w_mbytes_per_sec: "0"
-  qos_rw_ios_per_sec: "0"
-  storage_encrypt_secret: "key1"
-  storage_compress: "0"
+  # labels: "pool=pool1,tier=dev"
+  labels: "storage=mgx" 
+  min_cache_r_cache_size: "1024"
+  min_cache_rw_cache_size: "1024"
+  max_cache_r_cache_size: "131072"
+  max_cache_rw_cache_size: "10240"
+  ratio_cache_r_cache_size: "0.05"
+  ratio_cache_rw_cache_size: "0.1"
+  # qos_r_mbytes_per_sec: "0"
+  # qos_w_mbytes_per_sec: "0"
+  # qos_rw_ios_per_sec: "0"
+  # storage_encrypt_secret: "key1"
+  # storage_compress: "0"
 reclaimPolicy: Delete
 volumeBindingMode: Immediate
 allowVolumeExpansion: true

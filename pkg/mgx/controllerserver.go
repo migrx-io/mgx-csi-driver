@@ -306,6 +306,8 @@ func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, siz
 		return nil, err
 	}
 
+	// calc cache size based on cache attributes
+
 	createVolReq := util.CreateLVolData{
 		Name:                 util.PvcToVolName(req.GetName()),
 		Size:                 sizeMiB,
