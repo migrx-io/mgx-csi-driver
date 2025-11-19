@@ -39,6 +39,7 @@ ifeq ($(origin CSI_IMAGE_TAG), undefined)
 endif
 
 CSI_IMAGE := $(CSI_IMAGE_REGISTRY)/mgx-csi-driver:$(CSI_IMAGE_TAG)
+HELM_VERSION := 0.1.0
 
 # default target
 all: fmt build lint test
@@ -60,6 +61,12 @@ docker-build:
 .PHONY: docker-buildx
 docker-buildx:
 	@docker buildx build -t $(CSI_IMAGE) --platform linux/amd64,linux/arm64 . --push
+
+.PHONY: helm-buildx
+helm-buildx:
+	@helm package charts/mgx-csi-driver/
+	@helm push mgx-csi-driver-$(HELM_VERSION).tgz  oci://registry-1.docker.io/migrx 
+	@rm mgx-csi-driver-$(HELM_VERSION).tgz
 
 # static code check, text lint
 # lint: golangci yamllint shellcheck mdl codespell

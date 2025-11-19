@@ -2,7 +2,7 @@ apiVersion: v1
 appVersion: latest
 description: CSI Mgx Driver for Kubernetes
 name: mgx-csi-driver
-version: 0.1
+version: 0.1.0
 keywords:
 - csi
 - mgx-csi-driver
