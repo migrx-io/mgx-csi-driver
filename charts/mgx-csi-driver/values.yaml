@@ -38,6 +38,26 @@ storageclass:
   # Specifies whether  should be created
   create: true
 
+  # Custom labels (optional)
+  # labels: "storage=mgx"
+
+  # Cache size parameters (in MB)
+  # minCacheRCacheSize: "1024"
+  # minCacheRWCacheSize: "1024"
+  # maxCacheRCacheSize: "131072"
+  # maxCacheRWCacheSize: "10240"
+
+  # Cache ratio parameters
+  # ratioCacheRCacheSize: "0.05"
+  # ratioCacheRWCacheSize: "0.1"
+
+  # qosRMBPerSec: "0"
+  # qosWMBPerSec: "0"
+  # qosRWIOPS: "0"
+
+  # storageEncryptSecret: ""  # name of secret if encryption is enabled
+  # storageCompress: ""       # "0" to "9"
+
 externallyManagedSecret:
   # Specifies whether a externallyManagedConfigmap should be created
   create: true 
