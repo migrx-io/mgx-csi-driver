@@ -63,6 +63,8 @@ spec:
         - "--endpoint=unix:///csi/csi-provisioner.sock"
         - "--nodeid=$(NODE_ID)"
         - "--controller"
+        - "--timeout-volume-check={{ .Values.controller.timeoutVolumeCheck }}"
+        - "--idle-volume-min={{ .Values.controller.idleVolumeMin }}"
         env:
         - name: NODE_ID
           valueFrom:

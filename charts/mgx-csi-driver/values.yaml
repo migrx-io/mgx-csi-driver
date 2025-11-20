@@ -66,6 +66,8 @@ controller:
   replicas: 1
   nodeSelector: {}
   tolerations: {}
+  timeoutVolumeCheck: 10
+  idleVolumeMin: 5
 
 node:
   nodeSelector: {}
