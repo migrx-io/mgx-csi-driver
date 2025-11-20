@@ -32,8 +32,14 @@ spec:
         app: {{ .Values.externalSnapshotter.name }}
     spec:
       serviceAccountName: {{ .Values.externalSnapshotter.name }}
+{{- with .Values.controller.nodeSelector }}
       nodeSelector:
-        kubernetes.io/os: linux
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.controller.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}
       priorityClassName: {{ .Values.externalSnapshotter.priorityClassName }}
       containers:
         - name: {{ .Values.externalSnapshotter.name }}

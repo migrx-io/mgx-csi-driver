@@ -18,6 +18,14 @@ spec:
     spec:
       serviceAccount: mgxcsi-controller-sa
       hostNetwork: true
+{{- with .Values.controller.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.controller.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}
       containers:
       - name: mgxcsi-provisioner
         image: "{{ .Values.image.csiProvisioner.repository }}:{{ .Values.image.csiProvisioner.tag }}"

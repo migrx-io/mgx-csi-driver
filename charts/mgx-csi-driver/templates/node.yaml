@@ -16,6 +16,14 @@ spec:
     spec:
       serviceAccount: mgxcsi-node-sa
       hostNetwork: true
+{{- with .Values.node.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.node.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}
       initContainers:
       - name: load-nvme-tcp
         image: "{{ .Values.image.mgxcsi.repository }}:{{ .Values.image.mgxcsi.tag }}" 

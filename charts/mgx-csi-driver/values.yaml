@@ -64,6 +64,13 @@ externallyManagedSecret:
 
 controller:
   replicas: 1
+  nodeSelector: {}
+  tolerations: {}
+
+node:
+  nodeSelector: {}
+  tolerations:
+    - operator: "Exists"
 
 # The single snapshot controller deployment works for all CSI drivers
 # in a cluster. So enable it only if you kubernetes cluster does not
