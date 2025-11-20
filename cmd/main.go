@@ -25,6 +25,8 @@ func setupFlags() {
 	flag.StringVar(&conf.NodeID, "nodeid", "", "node id")
 	flag.BoolVar(&conf.IsControllerServer, "controller", false, "Start controller server")
 	flag.BoolVar(&conf.IsNodeServer, "node", false, "Start node server")
+	flag.IntVar(&conf.Timeout, "timeout", 600, "Volume reconcile timeout")
+	flag.IntVar(&conf.IdleVolumeMin, "idlevolumemin", 10, "Idle volume mins before to stop")
 
 	klog.InitFlags(nil)
 	if err := flag.Set("logtostderr", "true"); err != nil {

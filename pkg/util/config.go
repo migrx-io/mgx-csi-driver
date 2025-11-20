@@ -13,4 +13,6 @@ type Config struct {
 
 	IsControllerServer bool
 	IsNodeServer       bool
+	IdleVolumeMin      int
+	Timeout            int
 }

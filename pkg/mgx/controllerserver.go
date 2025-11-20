@@ -16,6 +16,12 @@ import (
 	"github.com/migrx-io/mgx-csi-driver/pkg/util"
 )
 
+const (
+	VolumeStatusStopped = "STOPPED"
+	VolumeStatusReady   = "READY"
+	VolumeStatusDeleted = "DELETED"
+)
+
 type controllerServer struct {
 	*csicommon.DefaultControllerServer
 	volumeLocks *util.VolumeLocks
@@ -68,7 +74,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	// there is no errors, check is state is READY
-	if volume.Status != "READY" {
+	if volume.Status != VolumeStatusReady {
 		klog.V(5).Infof("volume: %v is not READY", volume)
 		// reconcile
 		return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s is not READY: %s", volumeID, volume.Status))
@@ -97,6 +103,55 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	return &csi.CreateVolumeResponse{Volume: csiVolume}, nil
 }
 
+func (cs *controllerServer) IdleVolume(volumeID string) error {
+	unlock := cs.volumeLocks.Lock(volumeID)
+	defer unlock()
+
+	mgxClient, err := util.NewMGXClient()
+	if err != nil {
+		return err
+	}
+
+	klog.V(5).Info("mgxClient is created..")
+
+	// check if volume exists and STOPPED
+	volume, err := mgxClient.GetVolume(volumeID)
+
+	if err != nil && !errors.Is(err, util.ErrNotFound) {
+		klog.Errorf("failed to get volume, volumeID: %s err: %s", volumeID, err.Error())
+		return err
+	}
+
+	if errors.Is(err, util.ErrNotFound) {
+		klog.V(5).Infof("volume is not found: %v", volume)
+		return nil
+	}
+
+	// there is no errors, check is state is READY
+	if volume.Status == VolumeStatusStopped {
+		klog.V(5).Infof("volume is STOPPED: %v", volume)
+		// reconcile
+		return nil
+	}
+
+	// if volume is not STOPPED then stop it first
+	if volume.Status != VolumeStatusStopped {
+		klog.V(5).Infof("volume is not STOPPED: %v", volume)
+
+		err = cs.stopVolume(volumeID, mgxClient)
+		if err != nil {
+			klog.Errorf("failed to stop volume, volumeID: %s err: %s", volumeID, err.Error())
+			return err
+		}
+
+		klog.Infof("volume is stopping: %s", volumeID)
+		// reconcile
+		return nil
+	}
+
+	return nil
+}
+
 func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	unlock := cs.volumeLocks.Lock(volumeID)
@@ -122,15 +177,15 @@ func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 		return &csi.DeleteVolumeResponse{}, nil
 	}
 
-	// there is no errors, check is state is READY
-	if volume.Status == "DELETED" {
+	// there is no errors, check if state is DELETED
+	if volume.Status == VolumeStatusDeleted {
 		klog.V(5).Infof("volume is DELETED: %v", volume)
 		// reconcile
 		return &csi.DeleteVolumeResponse{}, nil
 	}
 
 	// if volume is not STOPPED then stop it first
-	if volume.Status != "STOPPED" {
+	if volume.Status != VolumeStatusStopped {
 		klog.V(5).Infof("volume is not STOPPED: %v", volume)
 
 		err = cs.stopVolume(volumeID, mgxClient)
@@ -525,7 +580,7 @@ func (cs *controllerServer) ControllerExpandVolume(_ context.Context, req *csi.C
 	}
 
 	// there is no errors, check is state is READY
-	if volume.Status != "READY" {
+	if volume.Status != VolumeStatusReady {
 		klog.V(5).Infof("volume is not READY: %v", volume)
 		// reconcile
 		err = cs.startVolume(volumeID, mgxClient)

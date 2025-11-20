@@ -1,6 +1,9 @@
 package mgx
 
 import (
+	"context"
+	"time"
+
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"k8s.io/klog"
 
@@ -47,6 +50,13 @@ func Run(conf *util.Config) {
 
 	if conf.IsControllerServer {
 		cs = newControllerServer(cd)
+
+		// Start volume reconciler
+		rec, err := NewVolumeReconciler(cs, conf.Timeout, time.Duration(conf.IdleVolumeMin)*time.Minute)
+		if err != nil {
+			klog.Fatalf("reconciler init error: %v", err)
+		}
+		go rec.Run(context.Background())
 	}
 
 	s := csicommon.NewNonBlockingGRPCServer()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -12,24 +13,58 @@ import (
 	mount "k8s.io/mount-utils"
 	"k8s.io/utils/exec"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	csicommon "github.com/migrx-io/mgx-csi-driver/pkg/csi-common"
 	"github.com/migrx-io/mgx-csi-driver/pkg/util"
+
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 type nodeServer struct {
 	*csicommon.DefaultNodeServer
 	mounter     mount.Interface
 	volumeLocks *util.VolumeLocks
+	kubeClient  *kubernetes.Clientset
 }
 
 func newNodeServer(d *csicommon.CSIDriver) *nodeServer {
+	cfg, _ := rest.InClusterConfig()
+	clientset, _ := kubernetes.NewForConfig(cfg)
+
 	ns := &nodeServer{
 		DefaultNodeServer: csicommon.NewDefaultNodeServer(d),
 		mounter:           mount.New(""),
 		volumeLocks:       util.NewVolumeLocks(),
+		kubeClient:        clientset,
 	}
 
 	return ns
+}
+
+func (ns *nodeServer) updateLastUsedAnnotation(volumeID string) {
+	ctx := context.Background()
+
+	klog.Infof("nodeServer updating last-used annotation for PV: %s", volumeID)
+
+	pv, err := ns.kubeClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, metav1.GetOptions{})
+	if err != nil {
+		klog.Errorf("nodeServer failed to get PV %s: %v", volumeID, err)
+		return
+	}
+
+	if pv.Annotations == nil {
+		pv.Annotations = map[string]string{}
+	}
+
+	pv.Annotations["migrx.io/last-used"] = time.Now().Format(time.RFC3339)
+
+	_, err = ns.kubeClient.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{})
+	if err != nil {
+		klog.Errorf("nodeServer failed to update PV %s annotation: %v", volumeID, err)
+		return
+	}
 }
 
 func (ns *nodeServer) NodeGetInfo(_ context.Context, _ *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
@@ -142,6 +177,10 @@ func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 		klog.Errorf("failed to publish volume, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+
+	// update annotation
+	ns.updateLastUsedAnnotation(volumeID)
+
 	return &csi.NodePublishVolumeResponse{}, nil
 }
 
@@ -155,6 +194,10 @@ func (ns *nodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpubl
 		klog.Errorf("failed to delete mount point, targetPath: %s err: %v", req.GetTargetPath(), err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+
+	// update annotation
+	ns.updateLastUsedAnnotation(volumeID)
+
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 
