@@ -82,15 +82,21 @@ func (r *VolumeReconciler) reconcile(ctx context.Context) {
 
 		volumeID := pv.Spec.CSI.VolumeHandle
 
-		// If attached → skip
-		if attachedPV[pv.Name] {
-			continue
-		}
-
 		// last-used annotation
 		lastUsedStr := pv.Annotations["migrx.io/last-used"]
 		lastUsed, _ := time.Parse(time.RFC3339, lastUsedStr)
 
+		// If attached → skip
+		if attachedPV[pv.Name] {
+			// attached but not tracked
+			if lastUsed.IsZero() {
+				r.updateLastUsedAnnotation(pv.Name, &now)
+			}
+
+			continue
+		}
+
+		// not attached yet
 		if lastUsed.IsZero() {
 			continue
 		}
@@ -103,6 +109,46 @@ func (r *VolumeReconciler) reconcile(ctx context.Context) {
 				klog.Errorf("stop volume failed %s: %v", volumeID, err)
 				continue
 			}
+			// clear time
+			r.updateLastUsedAnnotation(pv.Name, nil)
 		}
+	}
+}
+
+func (r *VolumeReconciler) updateLastUsedAnnotation(volumeID string, t *time.Time) {
+	ctx := context.Background()
+
+	klog.Infof("nodeServer updating last-used annotation for PV: %s", volumeID)
+
+	pv, err := r.kubeClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, metav1.GetOptions{})
+	if err != nil {
+		klog.Errorf("nodeServer failed to get PV %s: %v", volumeID, err)
+		return
+	}
+
+	if pv.Annotations == nil {
+		pv.Annotations = map[string]string{}
+	}
+
+	const key = "migrx.io/last-used"
+
+	if t == nil {
+		// Delete annotation if present
+		if _, exists := pv.Annotations[key]; exists {
+			delete(pv.Annotations, key)
+			klog.Infof("removed last-used annotation from PV %s", volumeID)
+		} else {
+			// nothing to delete
+			return
+		}
+	} else {
+		// Set/update annotation
+		pv.Annotations[key] = t.Format(time.RFC3339)
+	}
+
+	_, err = r.kubeClient.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{})
+	if err != nil {
+		klog.Errorf("nodeServer failed to update PV %s annotation: %v", volumeID, err)
+		return
 	}
 }
