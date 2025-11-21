@@ -76,6 +76,9 @@ func (r *VolumeReconciler) reconcile(ctx context.Context) {
 
 	for i := range pvList.Items {
 		pv := &pvList.Items[i]
+
+		klog.V(5).Infof("VolumeReconciler pv: %v", pv)
+
 		if pv.Spec.CSI == nil || pv.Spec.CSI.Driver != "csi.migrx.io" {
 			continue
 		}
@@ -86,8 +89,12 @@ func (r *VolumeReconciler) reconcile(ctx context.Context) {
 		lastUsedStr := pv.Annotations["migrx.io/last-used"]
 		lastUsed, _ := time.Parse(time.RFC3339, lastUsedStr)
 
+		klog.V(5).Infof("VolumeReconciler lastUsed: %s", lastUsed)
+
 		// If attached → skip
 		if attachedPV[pv.Name] {
+			klog.V(5).Infof("VolumeReconciler volume attached: %s", pv.Name)
+
 			// attached but not tracked
 			if lastUsed.IsZero() {
 				r.updateLastUsedAnnotation(pv.Name, &now)
@@ -95,6 +102,8 @@ func (r *VolumeReconciler) reconcile(ctx context.Context) {
 
 			continue
 		}
+
+		klog.V(5).Infof("VolumeReconciler volume is not attached: %s", lastUsed)
 
 		// not attached yet
 		if lastUsed.IsZero() {
