@@ -123,4 +123,3 @@ spec:
         hostPath:
           path: /lib/modules
           type: Directory
-
