@@ -337,7 +337,7 @@ func (ns *nodeServer) publishVolume(_ string, req *csi.NodePublishVolumeRequest)
 }
 
 func getDevicePath(req *csi.NodePublishVolumeRequest) string {
-	stagingParentPath := req.GetStagingTargetPath()
+	stagingPath := req.GetStagingTargetPath()
 
 	vc, err := util.LookupVolumeContext(stagingPath)
 	if err != nil {
