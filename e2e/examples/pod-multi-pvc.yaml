@@ -21,10 +21,10 @@ spec:
   volumes:
   - name: mgx-volume1
     persistentVolumeClaim:
-      claimName: mgxcsi-pvc1
+      claimName: mgxcsi-pvc-1
   - name: mgx-volume2
     persistentVolumeClaim:
-      claimName: mgxcsi-pvc2
+      claimName: mgxcsi-pvc-200
   - name: mgx-volume3
     persistentVolumeClaim:
-      claimName: mgxcsi-pvc3
+      claimName: mgxcsi-pvc-500
