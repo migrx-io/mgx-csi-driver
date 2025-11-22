@@ -88,7 +88,7 @@ func (ns *nodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolum
 
 	// stash VolumeContext to stagingParentPath (useful during Unstage as it has no
 	// VolumeContext passed to the RPC as per the CSI spec)
-	err = util.StashVolumeContext(vc, stagingParentPath)
+	err = util.StashVolumeContext(req.GetVolumeContext(), stagingParentPath)
 	if err != nil {
 		klog.Errorf("failed to stash volume context, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
@@ -337,7 +337,8 @@ func (ns *nodeServer) publishVolume(_ string, req *csi.NodePublishVolumeRequest)
 }
 
 func getDevicePath(req *csi.NodePublishVolumeRequest) string {
-	stagingPath := getStagingTargetPath(req)
+	stagingParentPath := req.GetStagingTargetPath()
+
 	vc, err := util.LookupVolumeContext(stagingPath)
 	if err != nil {
 		klog.Errorf("failed to lookup volume context at %s: %v", stagingPath, err)
