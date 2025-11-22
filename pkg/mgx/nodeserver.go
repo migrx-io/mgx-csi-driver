@@ -315,7 +315,6 @@ func (ns *nodeServer) isStaged(stagingPath string) (bool, error) {
 
 func (ns *nodeServer) publishVolume(_ string, req *csi.NodePublishVolumeRequest) error {
 	targetPath := req.GetTargetPath()
-	stagingPath := getStagingTargetPath(req)
 
 	mounted, err := ns.createMountPoint(targetPath)
 	if err != nil {
@@ -325,11 +324,30 @@ func (ns *nodeServer) publishVolume(_ string, req *csi.NodePublishVolumeRequest)
 		return nil
 	}
 
+	devicePath := getDevicePath(req)
+	if devicePath == "" {
+		return errors.New("devicePath not found for NodePublishVolume")
+	}
+
 	fsType := "ext4"
 	mntFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
-	mntFlags = append(mntFlags, "bind")
-	klog.Infof("mount %s to %s, fstype: %s, flags: %v", stagingPath, targetPath, fsType, mntFlags)
-	return ns.mounter.Mount(stagingPath, targetPath, fsType, mntFlags)
+
+	klog.Infof("mount %s to %s, fstype: %s, flags: %v", devicePath, targetPath, fsType, mntFlags)
+	return ns.mounter.Mount(devicePath, targetPath, fsType, mntFlags)
+}
+
+func getDevicePath(req *csi.NodePublishVolumeRequest) string {
+	stagingPath := getStagingTargetPath(req)
+	vc, err := util.LookupVolumeContext(stagingPath)
+	if err != nil {
+		klog.Errorf("failed to lookup volume context at %s: %v", stagingPath, err)
+		return ""
+	}
+	devicePath, ok := vc["devicePath"]
+	if !ok || devicePath == "" {
+		klog.Errorf("devicePath not found in volume context")
+	}
+	return devicePath
 }
 
 // unmount and delete mount point, must be idempotent
