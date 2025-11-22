@@ -88,7 +88,7 @@ func (ns *nodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolum
 
 	// stash VolumeContext to stagingParentPath (useful during Unstage as it has no
 	// VolumeContext passed to the RPC as per the CSI spec)
-	err = util.StashVolumeContext(req.GetVolumeContext(), stagingParentPath)
+	err = util.StashVolumeContext(vc, stagingParentPath)
 	if err != nil {
 		klog.Errorf("failed to stash volume context, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
