@@ -95,6 +95,12 @@ func (r *VolumeReconciler) reconcile(ctx context.Context) {
 		if attachedPV[pvcKey] {
 			klog.V(5).Infof("VolumeReconciler volume attached: %s", pv.Name)
 
+			// check and UNIdle first
+			if err := r.cs.UnIdleVolume(volumeID); err != nil {
+				klog.Errorf("unidle volume failed %s: %v", volumeID, err)
+				continue
+			}
+
 			// attached but not tracked
 			if lastUsed.IsZero() {
 				r.updateLastUsedAnnotation(pv.Name, &now)
@@ -116,7 +122,7 @@ func (r *VolumeReconciler) reconcile(ctx context.Context) {
 
 			// init clinet and stop volume
 			if err := r.cs.IdleVolume(volumeID); err != nil {
-				klog.Errorf("stop volume failed %s: %v", volumeID, err)
+				klog.Errorf("idle volume failed %s: %v", volumeID, err)
 				continue
 			}
 			// clear time
