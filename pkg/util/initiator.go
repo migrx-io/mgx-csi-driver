@@ -80,7 +80,7 @@ func NewMGXCsiInitiator(volumeContext map[string]string) (MGXCsiInitiator, error
 }
 
 func (nvmf *initiatorNVMf) Connect() (string, error) {
-	klog.Info("coonect to ", nvmf.nqn)
+	klog.Info("connect to ", nvmf.nqn)
 
 	alreadyConnected, err := isNqnConnected(nvmf.nqn)
 	if err != nil {

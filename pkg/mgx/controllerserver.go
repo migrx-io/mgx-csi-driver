@@ -601,6 +601,46 @@ func (cs *controllerServer) ControllerExpandVolume(_ context.Context, req *csi.C
 	}, nil
 }
 
+func (cs *controllerServer) ControllerPublishVolume(
+	_ context.Context,
+	req *csi.ControllerPublishVolumeRequest,
+) (*csi.ControllerPublishVolumeResponse, error) {
+	volumeID := req.GetVolumeId()
+	unlock := cs.volumeLocks.Lock(volumeID)
+	defer unlock()
+
+	mgxClient, err := util.NewMGXClient()
+	if err != nil {
+		klog.Errorf("failed to create mgx client: %v", err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	// Check volume status
+	volume, err := mgxClient.GetVolume(volumeID)
+	if err != nil {
+		klog.Errorf("failed to get volume %s: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	// Start the volume if it is stopped
+	if volume.Status == VolumeStatusStopped {
+		klog.Infof("volume %s is STOPPED, starting...", volumeID)
+		if err := cs.startVolume(volumeID, mgxClient); err != nil {
+			klog.Errorf("failed to start volume %s: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		// Return Aborted to trigger CSI reconcile if needed
+		return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s is starting", volumeID))
+	}
+
+	if volume.Status != VolumeStatusReady {
+		klog.Infof("volume %s is not READY yet: %s", volumeID, volume.Status)
+		return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s is not READY: %s", volumeID, volume.Status))
+	}
+
+	return &csi.ControllerPublishVolumeResponse{}, nil
+}
+
 func (cs *controllerServer) ControllerGetVolume(_ context.Context, req *csi.ControllerGetVolumeRequest) (*csi.ControllerGetVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 

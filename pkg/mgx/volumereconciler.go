@@ -74,8 +74,6 @@ func (r *VolumeReconciler) reconcile(ctx context.Context) {
 	for i := range pvList.Items {
 		pv := &pvList.Items[i]
 
-		klog.V(5).Infof("VolumeReconciler pv: %v", pv)
-
 		if pv.Spec.CSI == nil || pv.Spec.CSI.Driver != "csi.migrx.io" {
 			continue
 		}
@@ -92,8 +90,6 @@ func (r *VolumeReconciler) reconcile(ctx context.Context) {
 		// last-used annotation
 		lastUsedStr := pv.Annotations["migrx.io/last-used"]
 		lastUsed, _ := time.Parse(time.RFC3339, lastUsedStr)
-
-		klog.V(5).Infof("VolumeReconciler pvcKey: %s lastUsed: %s", pvcKey, lastUsed)
 
 		// If attached → skip
 		if attachedPV[pvcKey] {
