@@ -137,6 +137,12 @@ func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
 
+	vc := req.GetVolumeCapability()
+	if vc.GetAccessMode().GetMode() != csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER {
+		return nil, status.Error(codes.InvalidArgument,
+			"Only ReadWriteOnce (RWO) volumes is supported by this driver")
+	}
+
 	err := ns.publishVolume(getStagingTargetPath(req), req) // idempotent
 	if err != nil {
 		klog.Errorf("failed to publish volume, volumeID: %s err: %v", volumeID, err)

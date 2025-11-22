@@ -43,6 +43,14 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	var err error
 
+	// --- reject unsupported access modes ---
+	for _, vc := range req.GetVolumeCapabilities() {
+		if vc.GetAccessMode().GetMode() != csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER {
+			return nil, status.Error(codes.InvalidArgument,
+				"Only ReadWriteOnce (RWO) is supported by this driver")
+		}
+	}
+
 	mgxClient, err := util.NewMGXClient()
 	if err != nil {
 		klog.Errorf("failed to init mgxClient, err: %s", err)
