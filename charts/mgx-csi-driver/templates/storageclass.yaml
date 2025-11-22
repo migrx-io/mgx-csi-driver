@@ -14,10 +14,10 @@ parameters:
   {{- end }}
   min_cache_r_cache_size: "{{ .Values.storageclass.minCacheRCacheSize | default "1024" }}"
   min_cache_rw_cache_size: "{{ .Values.storageclass.minCacheRWCacheSize | default "1024" }}"
-  max_cache_r_cache_size: "{{ .Values.storageclass.maxCacheRCacheSize | default "131072" }}"
-  max_cache_rw_cache_size: "{{ .Values.storageclass.maxCacheRWCacheSize | default "10240" }}"
-  ratio_cache_r_cache_size: "{{ .Values.storageclass.ratioCacheRCacheSize | default "0.05" }}"
-  ratio_cache_rw_cache_size: "{{ .Values.storageclass.ratioCacheRWCacheSize | default "0.1" }}"
+  max_cache_r_cache_size: "{{ .Values.storageclass.maxCacheRCacheSize | default "20480" }}"
+  max_cache_rw_cache_size: "{{ .Values.storageclass.maxCacheRWCacheSize | default "3072" }}"
+  ratio_cache_r_cache_size: "{{ .Values.storageclass.ratioCacheRCacheSize | default "0.1" }}"
+  ratio_cache_rw_cache_size: "{{ .Values.storageclass.ratioCacheRWCacheSize | default "0.05" }}"
   {{- if .Values.storageclass.qosRMBPerSec }}
   qos_r_mbytes_per_sec: "{{ .Values.storageclass.qosRMBPerSec }}"
   {{- end }}
