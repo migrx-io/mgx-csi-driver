@@ -4,6 +4,6 @@ kind: CSIDriver
 metadata:
   name: {{ .Values.driverName }}
 spec:
-  attachRequired: false
+  attachRequired: true
   volumeLifecycleModes:
   - Persistent

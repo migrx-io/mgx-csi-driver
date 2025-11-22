@@ -128,8 +128,8 @@ func (cs *controllerServer) IdleVolume(volumeID string) error {
 	}
 
 	// there is no errors, check is state is READY
-	if volume.Status == VolumeStatusStopped {
-		klog.V(5).Infof("volume is STOPPED: %v", volume)
+	if volume.Status != VolumeStatusReady {
+		klog.V(5).Infof("volume is not READY: %v", volume)
 		// reconcile
 		return nil
 	}
