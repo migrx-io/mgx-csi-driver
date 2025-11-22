@@ -52,24 +52,21 @@ func (r *VolumeReconciler) Run(ctx context.Context) {
 func (r *VolumeReconciler) reconcile(ctx context.Context) {
 	klog.Infof("Volumereconciler scanning for idle volumes")
 
+	if r.timeout == 0 {
+		klog.Infof("Volumereconciler is disabled timeout == 0")
+		return
+	}
+
 	pvList, err := r.kubeClient.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		klog.Errorf("list PVs failed: %v", err)
 		return
 	}
 
-	vaList, err := r.kubeClient.StorageV1().VolumeAttachments().List(ctx, metav1.ListOptions{})
+	attachedPV, err := r.BuildPodVolumeUsageMap(ctx)
 	if err != nil {
-		klog.Errorf("list VAs failed: %v", err)
+		klog.Errorf("attachedPVPV failed: %v", err)
 		return
-	}
-
-	attachedPV := map[string]bool{}
-	for i := range vaList.Items {
-		va := &vaList.Items[i]
-		if va.Spec.Source.PersistentVolumeName != nil {
-			attachedPV[*va.Spec.Source.PersistentVolumeName] = va.Status.Attached
-		}
 	}
 
 	now := time.Now()
@@ -83,16 +80,23 @@ func (r *VolumeReconciler) reconcile(ctx context.Context) {
 			continue
 		}
 
+		// Extract claimRef
+		if pv.Spec.ClaimRef == nil {
+			klog.Infof("PV %s has no ClaimRef → unused", pv.Name)
+			continue
+		}
+
+		pvcKey := pv.Spec.ClaimRef.Namespace + "/" + pv.Spec.ClaimRef.Name
 		volumeID := pv.Spec.CSI.VolumeHandle
 
 		// last-used annotation
 		lastUsedStr := pv.Annotations["migrx.io/last-used"]
 		lastUsed, _ := time.Parse(time.RFC3339, lastUsedStr)
 
-		klog.V(5).Infof("VolumeReconciler lastUsed: %s", lastUsed)
+		klog.V(5).Infof("VolumeReconciler pvcKey: %s lastUsed: %s", pvcKey, lastUsed)
 
 		// If attached → skip
-		if attachedPV[pv.Name] {
+		if attachedPV[pvcKey] {
 			klog.V(5).Infof("VolumeReconciler volume attached: %s", pv.Name)
 
 			// attached but not tracked
@@ -105,8 +109,9 @@ func (r *VolumeReconciler) reconcile(ctx context.Context) {
 
 		klog.V(5).Infof("VolumeReconciler volume is not attached: %s", lastUsed)
 
-		// not attached yet
+		// not attached yet and not have date set
 		if lastUsed.IsZero() {
+			r.updateLastUsedAnnotation(pv.Name, &now)
 			continue
 		}
 
@@ -160,4 +165,29 @@ func (r *VolumeReconciler) updateLastUsedAnnotation(volumeID string, t *time.Tim
 		klog.Errorf("nodeServer failed to update PV %s annotation: %v", volumeID, err)
 		return
 	}
+}
+
+func (r *VolumeReconciler) BuildPodVolumeUsageMap(ctx context.Context) (map[string]bool, error) {
+	// 1. List all pods once
+	podList, err := r.kubeClient.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Collect PVC names used by pods
+	pvcUsed := map[string]bool{}
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+
+		for i := range pod.Spec.Volumes {
+			vol := &pod.Spec.Volumes[i]
+
+			if vol.PersistentVolumeClaim != nil {
+				pvcName := pod.Namespace + "/" + vol.PersistentVolumeClaim.ClaimName
+				pvcUsed[pvcName] = true
+			}
+		}
+	}
+
+	return pvcUsed, nil
 }
