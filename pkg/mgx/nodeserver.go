@@ -46,23 +46,12 @@ func (ns *nodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolum
 	defer unlock()
 
 	stagingParentPath := req.GetStagingTargetPath() // use this directory to persistently store VolumeContext
-	stagingTargetPath := getStagingTargetPath(req)
-
-	isStaged, err := ns.isStaged(stagingTargetPath)
-	if err != nil {
-		klog.Errorf("failed to check isStaged, targetPath: %s err: %v", stagingTargetPath, err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	if isStaged {
-		klog.Warning("volume already staged")
-		return &csi.NodeStageVolumeResponse{}, nil
-	}
 
 	var initiator util.MGXCsiInitiator
 	vc := req.GetVolumeContext()
 
 	vc["stagingParentPath"] = stagingParentPath
-	initiator, err = util.NewMGXCsiInitiator(vc)
+	initiator, err := util.NewMGXCsiInitiator(vc)
 	if err != nil {
 		klog.Errorf("failed to create mgx initiator, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
@@ -78,10 +67,6 @@ func (ns *nodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolum
 			initiator.Disconnect() //nolint:errcheck // ignore error
 		}
 	}()
-	if err = ns.stageVolume(devicePath, stagingTargetPath, req); err != nil { // idempotent
-		klog.Errorf("failed to stage volume, volumeID: %s devicePath:%s err: %v", volumeID, devicePath, err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
 
 	// save device path
 	vc["devicePath"] = devicePath
@@ -102,13 +87,6 @@ func (ns *nodeServer) NodeUnstageVolume(_ context.Context, req *csi.NodeUnstageV
 	defer unlock()
 
 	stagingParentPath := req.GetStagingTargetPath()
-	stagingTargetPath := getStagingTargetPath(req)
-
-	err := ns.deleteMountPoint(stagingTargetPath) // idempotent
-	if err != nil {
-		klog.Errorf("failed to delete mount point, targetPath: %s err: %v", stagingTargetPath, err)
-		return nil, status.Errorf(codes.Internal, "unstage volume %s failed: %s", volumeID, err)
-	}
 
 	volumeContext, err := util.LookupVolumeContext(stagingParentPath)
 	if err != nil {
@@ -143,7 +121,7 @@ func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 			"Only ReadWriteOnce (RWO) volumes is supported by this driver")
 	}
 
-	err := ns.publishVolume(getStagingTargetPath(req), req) // idempotent
+	err := ns.publishVolume(req) // idempotent
 	if err != nil {
 		klog.Errorf("failed to publish volume, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
@@ -231,39 +209,6 @@ func (*nodeServer) NodeExpandVolume(_ context.Context, req *csi.NodeExpandVolume
 	return &csi.NodeExpandVolumeResponse{}, nil
 }
 
-func (ns *nodeServer) stageVolume(devicePath, stagingPath string, req *csi.NodeStageVolumeRequest) error {
-	mounted, err := ns.createMountPoint(stagingPath)
-	if err != nil {
-		return err
-	}
-	if mounted {
-		return nil
-	}
-
-	fsType := "ext4"
-	mntFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
-
-	switch req.VolumeCapability.AccessMode.Mode {
-	case csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY,
-		csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY:
-		return errors.New("unsupported MULTI_NODE_MULTI_WRITER AccessMode")
-	case csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER:
-		return errors.New("unsupported MULTI_NODE_MULTI_WRITER AccessMode")
-	case csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER:
-	case csi.VolumeCapability_AccessMode_SINGLE_NODE_MULTI_WRITER:
-	case csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER:
-	case csi.VolumeCapability_AccessMode_UNKNOWN:
-	}
-
-	klog.Infof("mount %s to %s, fstype: %s, flags: %v", devicePath, stagingPath, fsType, mntFlags)
-	mounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
-	err = mounter.FormatAndMount(devicePath, stagingPath, fsType, mntFlags)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 func (ns *nodeServer) createMountPoint(path string) (bool, error) {
 	// Check if the path is already a mount point
 	isMount, err := ns.mounter.IsMountPoint(path)
@@ -298,22 +243,7 @@ func (ns *nodeServer) createMountPoint(path string) (bool, error) {
 	return false, nil
 }
 
-// isStaged if stagingPath is a mount point, it means it is already staged, and vice versa
-func (ns *nodeServer) isStaged(stagingPath string) (bool, error) {
-	isMount, err := ns.mounter.IsMountPoint(stagingPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		} else if mount.IsCorruptedMnt(err) {
-			return true, nil
-		}
-		klog.Warningf("check is stage error: %v", err)
-		return false, err
-	}
-	return isMount, nil
-}
-
-func (ns *nodeServer) publishVolume(_ string, req *csi.NodePublishVolumeRequest) error {
+func (ns *nodeServer) publishVolume(req *csi.NodePublishVolumeRequest) error {
 	targetPath := req.GetTargetPath()
 
 	mounted, err := ns.createMountPoint(targetPath)
@@ -344,6 +274,9 @@ func getDevicePath(req *csi.NodePublishVolumeRequest) string {
 		klog.Errorf("failed to lookup volume context at %s: %v", stagingPath, err)
 		return ""
 	}
+
+	klog.Infof("getDevicePath, vc: %v, npvc: %v", vc, req.GetVolumeContext())
+
 	devicePath, ok := vc["devicePath"]
 	if !ok || devicePath == "" {
 		klog.Errorf("devicePath not found in volume context")
@@ -374,18 +307,4 @@ func (ns *nodeServer) deleteMountPoint(path string) error {
 		}
 	}
 	return os.RemoveAll(path)
-}
-
-func getStagingTargetPath(req any) string {
-	switch vr := req.(type) {
-	case *csi.NodeStageVolumeRequest:
-		return vr.GetStagingTargetPath() + "/" + vr.GetVolumeId()
-	case *csi.NodeUnstageVolumeRequest:
-		return vr.GetStagingTargetPath() + "/" + vr.GetVolumeId()
-	case *csi.NodePublishVolumeRequest:
-		return vr.GetStagingTargetPath() + "/" + vr.GetVolumeId()
-	default:
-		klog.Warningf("invalid request %T", vr)
-	}
-	return ""
 }
