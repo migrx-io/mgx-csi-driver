@@ -263,7 +263,9 @@ func (ns *nodeServer) publishVolume(req *csi.NodePublishVolumeRequest) error {
 	mntFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
 
 	klog.Infof("mount %s to %s, fstype: %s, flags: %v", devicePath, targetPath, fsType, mntFlags)
-	return ns.mounter.Mount(devicePath, targetPath, fsType, mntFlags)
+
+	mounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
+	return mounter.FormatAndMount(devicePath, targetPath, fsType, mntFlags)
 }
 
 func getDevicePath(req *csi.NodePublishVolumeRequest) string {
