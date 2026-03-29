@@ -11,6 +11,9 @@ type Config struct {
 	Endpoint      string
 	NodeID        string
 
+	NrIoQueues int
+	QueueSize  int
+
 	IsControllerServer bool
 	IsNodeServer       bool
 	IdleVolumeMin      int

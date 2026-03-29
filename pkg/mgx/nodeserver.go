@@ -20,13 +20,15 @@ type nodeServer struct {
 	*csicommon.DefaultNodeServer
 	mounter     mount.Interface
 	volumeLocks *util.VolumeLocks
+	conf        *util.Config
 }
 
-func newNodeServer(d *csicommon.CSIDriver) *nodeServer {
+func newNodeServer(d *csicommon.CSIDriver, conf *util.Config) *nodeServer {
 	ns := &nodeServer{
 		DefaultNodeServer: csicommon.NewDefaultNodeServer(d),
 		mounter:           mount.New(""),
 		volumeLocks:       util.NewVolumeLocks(),
+		conf:              conf,
 	}
 
 	return ns
@@ -57,7 +59,7 @@ func (ns *nodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolum
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	devicePath, err := initiator.Connect() // idempotent
+	devicePath, err := initiator.Connect(ns.conf.NrIoQueues, ns.conf.QueueSize) // idempotent
 	if err != nil {
 		klog.Errorf("failed to connect initiator, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())

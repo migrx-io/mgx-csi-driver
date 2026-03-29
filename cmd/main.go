@@ -27,6 +27,8 @@ func setupFlags() {
 	flag.BoolVar(&conf.IsNodeServer, "node", false, "Start node server")
 	flag.IntVar(&conf.Timeout, "timeout-volume-check", 600, "Volume reconcile timeout")
 	flag.IntVar(&conf.IdleVolumeMin, "idle-volume-min", 10, "Idle volume mins before to stop")
+	flag.IntVar(&conf.NrIoQueues, "nr-io-queues", 2, "Number of I/O queues for nvme")
+	flag.IntVar(&conf.QueueSize, "queue-size", 8, "Queue size for nvme")
 
 	klog.InitFlags(nil)
 	if err := flag.Set("logtostderr", "true"); err != nil {

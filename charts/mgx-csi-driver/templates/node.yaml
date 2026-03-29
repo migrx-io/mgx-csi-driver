@@ -70,6 +70,8 @@ spec:
         - "--v=5"
         - "--endpoint=unix:///csi/csi.sock"
         - "--nodeid=$(NODE_ID)"
+        - "--nr-io-queues={{ .Values.node.nrIoQueues }}"
+        - "--queue-size={{ .Values.node.queueSize }}"
         - "--node"
         env:
         - name: NODE_ID

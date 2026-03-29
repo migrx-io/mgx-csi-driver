@@ -73,6 +73,8 @@ node:
   nodeSelector: {}
   tolerations:
     - operator: "Exists"
+  nrIoQueues: 2
+  queueSize: 8
 
 # The single snapshot controller deployment works for all CSI drivers
 # in a cluster. So enable it only if you kubernetes cluster does not

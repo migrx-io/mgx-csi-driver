@@ -28,7 +28,7 @@ const (
 //   - Caller(node service) should serialize calls to same initiator
 //   - Implementation should be idempotent to duplicated requests
 type MGXCsiInitiator interface {
-	Connect() (string, error)
+	Connect(nrIoQueues, queueSize int) (string, error)
 	Disconnect() error
 }
 
@@ -79,7 +79,7 @@ func NewMGXCsiInitiator(volumeContext map[string]string) (MGXCsiInitiator, error
 	}, nil
 }
 
-func (nvmf *initiatorNVMf) Connect() (string, error) {
+func (nvmf *initiatorNVMf) Connect(nrIoQueues, queueSize int) (string, error) {
 	klog.Info("connect to ", nvmf.nqn)
 
 	alreadyConnected, err := isNqnConnected(nvmf.nqn)
@@ -111,6 +111,8 @@ func (nvmf *initiatorNVMf) Connect() (string, error) {
 			"-a", connection.IP,
 			"-s", strconv.Itoa(connection.Port),
 			"-n", nvmf.nqn,
+			"--nr-io-queues=" + strconv.Itoa(nrIoQueues),
+			"--queue-size=" + strconv.Itoa(queueSize),
 			"--ctrl-loss-tmo=" + strconv.Itoa(nvmf.ctrlLossTmo),
 			"--reconnect-delay=" + strconv.Itoa(nvmf.reconnectDelay),
 			"--fast_io_fail_tmo=" + strconv.Itoa(nvmf.fastIOFailTmo),

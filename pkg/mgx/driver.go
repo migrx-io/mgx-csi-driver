@@ -42,10 +42,10 @@ func Run(conf *util.Config) {
 		cd.AddVolumeCapabilityAccessModes(volumeModes)
 	}
 
-	ids = newIdentityServer(cd, conf.DriverName, conf.DriverVersion)
+	ids = newIdentityServer(cd, conf)
 
 	if conf.IsNodeServer {
-		ns = newNodeServer(cd)
+		ns = newNodeServer(cd, conf)
 	}
 
 	if conf.IsControllerServer {
