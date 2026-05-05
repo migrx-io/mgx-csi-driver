@@ -50,7 +50,6 @@ func (ns *nodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolum
 	stagingTargetPath := req.GetStagingTargetPath()
 	stagingParentPath := filepath.Dir(stagingTargetPath) // store context outside the mount point
 
-	var initiator util.MGXCsiInitiator
 	vc := req.GetVolumeContext()
 
 	initiator, err := util.NewMGXCsiInitiator(vc)
