@@ -58,6 +58,8 @@ storageclass:
   # storageEncryptSecret: ""  # name of secret if encryption is enabled
   # storageCompress: ""       # "0" to "9"
 
+  # reclaimPolicy: Delete     # Delete or Retain
+
 externallyManagedSecret:
   # Specifies whether a externallyManagedConfigmap should be created
   create: true 

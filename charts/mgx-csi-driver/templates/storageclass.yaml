@@ -33,7 +33,7 @@ parameters:
   {{- if .Values.storageclass.storageCompress }}
   storage_compress: "{{ .Values.storageclass.storageCompress }}"
   {{- end }}
-reclaimPolicy: Delete
+reclaimPolicy: {{ .Values.storageclass.reclaimPolicy | default "Delete" }}
 volumeBindingMode: Immediate
 allowVolumeExpansion: true
 {{- end -}}
