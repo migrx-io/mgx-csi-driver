@@ -138,6 +138,14 @@ func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 			"Only ReadWriteOnce (RWO) volumes is supported by this driver")
 	}
 
+	stagingTargetPath := req.GetStagingTargetPath()
+	stagingParentPath := filepath.Dir(stagingTargetPath)
+
+	if err := ns.ensureStagingHealthy(volumeID, stagingTargetPath, stagingParentPath); err != nil {
+		klog.Errorf("failed to recover staging, volumeID: %s err: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
 	err := ns.publishVolume(req) // idempotent
 	if err != nil {
 		klog.Errorf("failed to publish volume, volumeID: %s err: %v", volumeID, err)
@@ -224,6 +232,69 @@ func (*nodeServer) NodeExpandVolume(_ context.Context, req *csi.NodeExpandVolume
 	}
 
 	return &csi.NodeExpandVolumeResponse{}, nil
+}
+
+// ensureStagingHealthy checks whether the NVMe device and staging mount are intact.
+// If the SPDK target failed and the staging is broken, it reconnects and remounts so that
+// a subsequent pod restart (Unpublish → Publish) can recover without a full Unstage/Stage cycle.
+func (ns *nodeServer) ensureStagingHealthy(volumeID, stagingTargetPath, stagingParentPath string) error {
+	volumeContext, err := util.LookupVolumeContext(stagingParentPath)
+	if err != nil {
+		// No context means Stage was never completed; nothing to recover.
+		klog.Infof("skipping staging health check for volume %s: %v", volumeID, err)
+		return nil
+	}
+
+	devicePath := volumeContext["devicePath"]
+	_, deviceErr := os.Stat(devicePath)
+	deviceExists := deviceErr == nil
+
+	isMounted, mountErr := ns.mounter.IsMountPoint(stagingTargetPath)
+	if mountErr != nil && !os.IsNotExist(mountErr) && !mount.IsCorruptedMnt(mountErr) {
+		return mountErr
+	}
+
+	if deviceExists && isMounted && mountErr == nil {
+		return nil // staging is healthy
+	}
+
+	klog.Infof("staging unhealthy for volume %s (deviceExists=%v, isMounted=%v, mountErr=%v), recovering",
+		volumeID, deviceExists, isMounted, mountErr)
+
+	if isMounted || mount.IsCorruptedMnt(mountErr) {
+		if err := ns.deleteMountPoint(stagingTargetPath); err != nil {
+			klog.Warningf("failed to clean staging mount during recovery for volume %s: %v", volumeID, err)
+		}
+	}
+
+	initiator, err := util.NewMGXCsiInitiator(volumeContext)
+	if err != nil {
+		return err
+	}
+
+	// Disconnect first (idempotent) to clear any zombie NVMe controller before reconnecting.
+	if err := initiator.Disconnect(); err != nil {
+		klog.Warningf("disconnect during recovery for volume %s: %v", volumeID, err)
+	}
+
+	newDevicePath, err := initiator.Connect(ns.conf.NrIoQueues, ns.conf.QueueSize)
+	if err != nil {
+		return err
+	}
+
+	mounted, err := ns.createMountPoint(stagingTargetPath)
+	if err != nil {
+		return err
+	}
+	if !mounted {
+		sfMounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
+		if err = sfMounter.FormatAndMount(newDevicePath, stagingTargetPath, "ext4", nil); err != nil {
+			return err
+		}
+	}
+
+	volumeContext["devicePath"] = newDevicePath
+	return util.StashVolumeContext(volumeContext, stagingParentPath)
 }
 
 func (ns *nodeServer) createMountPoint(path string) (bool, error) {
