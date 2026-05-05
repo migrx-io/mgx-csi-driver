@@ -2,8 +2,8 @@ package mgx
 
 import (
 	"context"
-	"errors"
 	"os"
+	"path/filepath"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -47,12 +47,12 @@ func (ns *nodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolum
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
 
-	stagingParentPath := req.GetStagingTargetPath() // use this directory to persistently store VolumeContext
+	stagingTargetPath := req.GetStagingTargetPath()
+	stagingParentPath := filepath.Dir(stagingTargetPath) // store context outside the mount point
 
 	var initiator util.MGXCsiInitiator
 	vc := req.GetVolumeContext()
 
-	vc["stagingParentPath"] = stagingParentPath
 	initiator, err := util.NewMGXCsiInitiator(vc)
 	if err != nil {
 		klog.Errorf("failed to create mgx initiator, volumeID: %s err: %v", volumeID, err)
@@ -70,12 +70,24 @@ func (ns *nodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolum
 		}
 	}()
 
-	// save device path
+	mounted, err := ns.createMountPoint(stagingTargetPath)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if !mounted {
+		mntFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
+		sfMounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
+		if err = sfMounter.FormatAndMount(devicePath, stagingTargetPath, "ext4", mntFlags); err != nil {
+			klog.Errorf("failed to format and mount device, volumeID: %s err: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+	}
+
 	vc["devicePath"] = devicePath
 
-	// stash VolumeContext to stagingParentPath (useful during Unstage as it has no
+	// stash VolumeContext to parent of stagingTargetPath (useful during Unstage as it has no
 	// VolumeContext passed to the RPC as per the CSI spec)
-	err = util.StashVolumeContext(req.GetVolumeContext(), stagingParentPath)
+	err = util.StashVolumeContext(vc, stagingParentPath)
 	if err != nil {
 		klog.Errorf("failed to stash volume context, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
@@ -88,7 +100,8 @@ func (ns *nodeServer) NodeUnstageVolume(_ context.Context, req *csi.NodeUnstageV
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
 
-	stagingParentPath := req.GetStagingTargetPath()
+	stagingTargetPath := req.GetStagingTargetPath()
+	stagingParentPath := filepath.Dir(stagingTargetPath)
 
 	volumeContext, err := util.LookupVolumeContext(stagingParentPath)
 	if err != nil {
@@ -100,12 +113,15 @@ func (ns *nodeServer) NodeUnstageVolume(_ context.Context, req *csi.NodeUnstageV
 		klog.Errorf("failed to create mgx initiator, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	err = initiator.Disconnect() // idempotent
-	if err != nil {
+	if err = ns.deleteMountPoint(stagingTargetPath); err != nil {
+		klog.Errorf("failed to unmount staging path, volumeID: %s err: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if err = initiator.Disconnect(); err != nil { // idempotent
 		klog.Errorf("failed to disconnect initiator, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	if err := util.CleanUpVolumeContext(stagingParentPath); err != nil {
+	if err = util.CleanUpVolumeContext(stagingParentPath); err != nil {
 		klog.Errorf("failed to clean up volume context, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -179,7 +195,7 @@ func (*nodeServer) NodeExpandVolume(_ context.Context, req *csi.NodeExpandVolume
 
 	volumeMountPath := req.GetVolumePath()
 
-	stagingParentPath := req.GetStagingTargetPath()
+	stagingParentPath := filepath.Dir(req.GetStagingTargetPath())
 	volumeContext, err := util.LookupVolumeContext(stagingParentPath)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to retrieve volume context for volume %s: %v", volumeID, err)
@@ -247,6 +263,7 @@ func (ns *nodeServer) createMountPoint(path string) (bool, error) {
 
 func (ns *nodeServer) publishVolume(req *csi.NodePublishVolumeRequest) error {
 	targetPath := req.GetTargetPath()
+	sourcePath := req.GetStagingTargetPath()
 
 	mounted, err := ns.createMountPoint(targetPath)
 	if err != nil {
@@ -256,36 +273,8 @@ func (ns *nodeServer) publishVolume(req *csi.NodePublishVolumeRequest) error {
 		return nil
 	}
 
-	devicePath := getDevicePath(req)
-	if devicePath == "" {
-		return errors.New("devicePath not found for NodePublishVolume")
-	}
-
-	fsType := "ext4"
-	mntFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
-
-	klog.Infof("mount %s to %s, fstype: %s, flags: %v", devicePath, targetPath, fsType, mntFlags)
-
-	mounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
-	return mounter.FormatAndMount(devicePath, targetPath, fsType, mntFlags)
-}
-
-func getDevicePath(req *csi.NodePublishVolumeRequest) string {
-	stagingPath := req.GetStagingTargetPath()
-
-	vc, err := util.LookupVolumeContext(stagingPath)
-	if err != nil {
-		klog.Errorf("failed to lookup volume context at %s: %v", stagingPath, err)
-		return ""
-	}
-
-	klog.Infof("getDevicePath, vc: %v, npvc: %v", vc, req.GetVolumeContext())
-
-	devicePath, ok := vc["devicePath"]
-	if !ok || devicePath == "" {
-		klog.Errorf("devicePath not found in volume context")
-	}
-	return devicePath
+	klog.Infof("bind mount %s to %s", sourcePath, targetPath)
+	return ns.mounter.Mount(sourcePath, targetPath, "", []string{"bind"})
 }
 
 // unmount and delete mount point, must be idempotent
