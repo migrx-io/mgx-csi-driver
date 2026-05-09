@@ -67,7 +67,7 @@ func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 	targetPath := req.GetTargetPath()
 	volumeContext := req.GetVolumeContext()
 
-	initiator, err := util.NewMGXCsiInitiator(volumeContext)
+	initiator, err := util.NewMGXCsiInitiator(volumeContext, ns.conf)
 	if err != nil {
 		klog.Errorf("failed to create mgx initiator, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
@@ -133,7 +133,7 @@ func (ns *nodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpubl
 	}
 
 	if volumeContext != nil {
-		initiator, err := util.NewMGXCsiInitiator(volumeContext)
+		initiator, err := util.NewMGXCsiInitiator(volumeContext, ns.conf)
 		if err != nil {
 			klog.Errorf("failed to create mgx initiator, volumeID: %s err: %v", volumeID, err)
 			if unmountErr != nil {

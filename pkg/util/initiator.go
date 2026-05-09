@@ -17,10 +17,6 @@ import (
 
 const (
 	DevDiskByID = "/dev/disk/by-id/*%s*"
-
-	reconnectDelay = 2
-	ctrlLossTmo    = 30
-	fastIOFailTmo  = 30
 )
 
 // MGXCsiInitiator defines interface for NVMeoF initiator
@@ -68,15 +64,15 @@ func NewMGXClient() (*NodeNVMf, error) {
 	return NewNVMf(clusterConfig), nil
 }
 
-func NewMGXCsiInitiator(volumeContext map[string]string) (MGXCsiInitiator, error) {
+func NewMGXCsiInitiator(volumeContext map[string]string, conf *Config) (MGXCsiInitiator, error) {
 	klog.Infof("mgx nqn :%s", volumeContext["nqn"])
 
 	return &initiatorNVMf{
 		name:           volumeContext["name"],
 		nqn:            volumeContext["nqn"],
-		reconnectDelay: reconnectDelay,
-		ctrlLossTmo:    ctrlLossTmo,
-		fastIOFailTmo:  fastIOFailTmo,
+		reconnectDelay: conf.ReconnectDelay,
+		ctrlLossTmo:    conf.CtrlLossTmo,
+		fastIOFailTmo:  conf.FastIOFailTmo,
 	}, nil
 }
 

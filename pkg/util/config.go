@@ -14,6 +14,11 @@ type Config struct {
 	NrIoQueues int
 	QueueSize  int
 
+	// NVMe-oF connection timeouts (seconds), passed to `nvme connect`.
+	ReconnectDelay int
+	CtrlLossTmo    int
+	FastIOFailTmo  int
+
 	IsControllerServer bool
 	IsNodeServer       bool
 	IdleVolumeMin      int

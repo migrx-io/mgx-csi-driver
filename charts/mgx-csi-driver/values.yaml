@@ -77,6 +77,15 @@ node:
     - operator: "Exists"
   nrIoQueues: 2
   queueSize: 16
+  # NVMe-oF connection timeouts (seconds) passed to `nvme connect`.
+  # fastIoFailTmo: how long the host queues I/O on a lost controller before
+  #   failing fast with EIO. 0 = fail immediately on any controller fault.
+  # ctrlLossTmo: how long the host keeps retrying reconnect before removing
+  #   the controller permanently. Should be >= fastIoFailTmo.
+  # reconnectDelay: pause between reconnect attempts.
+  fastIoFailTmo: 0
+  ctrlLossTmo: 10
+  reconnectDelay: 2
 
 # The single snapshot controller deployment works for all CSI drivers
 # in a cluster. So enable it only if you kubernetes cluster does not

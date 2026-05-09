@@ -72,6 +72,9 @@ spec:
         - "--nodeid=$(NODE_ID)"
         - "--nr-io-queues={{ .Values.node.nrIoQueues }}"
         - "--queue-size={{ .Values.node.queueSize }}"
+        - "--fast-io-fail-tmo={{ .Values.node.fastIoFailTmo }}"
+        - "--ctrl-loss-tmo={{ .Values.node.ctrlLossTmo }}"
+        - "--reconnect-delay={{ .Values.node.reconnectDelay }}"
         - "--node"
         env:
         - name: NODE_ID
