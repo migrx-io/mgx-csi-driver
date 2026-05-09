@@ -2,8 +2,11 @@ package mgx
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -77,7 +80,7 @@ func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 	}
 	defer func() {
 		if err != nil {
-			initiator.Disconnect() //nolint:errcheck
+			initiator.Disconnect() //nolint:errcheck // best-effort rollback after publish failure; surfaced error already logged
 		}
 	}()
 
@@ -111,32 +114,47 @@ func (ns *nodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpubl
 	targetPath := req.GetTargetPath()
 	contextPath := filepath.Dir(targetPath)
 
-	volumeContext, err := util.LookupVolumeContext(contextPath)
-	if err != nil {
-		klog.Warningf("no volume context for volume %s, skipping disconnect: %v", volumeID, err)
-		if err := ns.deleteMountPoint(targetPath); err != nil {
-			klog.Errorf("failed to delete mount point, volumeID: %s err: %v", volumeID, err)
+	volumeContext, ctxErr := util.LookupVolumeContext(contextPath)
+	if ctxErr != nil {
+		klog.Warningf("no volume context for volume %s, skipping disconnect: %v", volumeID, ctxErr)
+	}
+
+	// Best-effort fstrim before unmount so the thin-provisioned backend can
+	// reclaim freed blocks. Skipped (not retried) when the filesystem looks
+	// unhealthy, so an EIO-wedged volume can't block unpublish.
+	ns.bestEffortFstrim(targetPath)
+
+	// Always attempt unmount AND disconnect, regardless of which fails first.
+	// A stuck filesystem (EIO from a dead NVMe-oF controller) must not prevent
+	// the controller teardown — otherwise the next NodePublish reuses stale state.
+	unmountErr := ns.deleteMountPoint(targetPath)
+	if unmountErr != nil {
+		klog.Errorf("failed to unmount target path, volumeID: %s err: %v (continuing to disconnect)", volumeID, unmountErr)
+	}
+
+	if volumeContext != nil {
+		initiator, err := util.NewMGXCsiInitiator(volumeContext)
+		if err != nil {
+			klog.Errorf("failed to create mgx initiator, volumeID: %s err: %v", volumeID, err)
+			if unmountErr != nil {
+				return nil, status.Error(codes.Internal, unmountErr.Error())
+			}
 			return nil, status.Error(codes.Internal, err.Error())
 		}
-		return &csi.NodeUnpublishVolumeResponse{}, nil
+		if err := initiator.Disconnect(); err != nil { // idempotent
+			klog.Errorf("failed to disconnect initiator, volumeID: %s err: %v", volumeID, err)
+			if unmountErr != nil {
+				return nil, status.Error(codes.Internal, unmountErr.Error())
+			}
+			return nil, status.Error(codes.Internal, err.Error())
+		}
 	}
 
-	if err = ns.deleteMountPoint(targetPath); err != nil {
-		klog.Errorf("failed to unmount target path, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
+	if unmountErr != nil {
+		return nil, status.Error(codes.Internal, unmountErr.Error())
 	}
 
-	initiator, err := util.NewMGXCsiInitiator(volumeContext)
-	if err != nil {
-		klog.Errorf("failed to create mgx initiator, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	if err = initiator.Disconnect(); err != nil { // idempotent
-		klog.Errorf("failed to disconnect initiator, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	if err = util.CleanUpVolumeContext(contextPath); err != nil {
+	if err := util.CleanUpVolumeContext(contextPath); err != nil {
 		klog.Errorf("failed to clean up volume context, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -212,10 +230,15 @@ func (ns *nodeServer) createMountPoint(path string) (bool, error) {
 			return false, nil
 		}
 
-		// Corrupted mount entry — treat as mounted to prevent accidental mount over it.
+		// Corrupted mount (e.g., orphaned after NVMe-oF controller loss).
+		// Force lazy-unmount so the publish path can mount fresh.
 		if mount.IsCorruptedMnt(err) {
-			klog.Warningf("Corrupted mount point detected for %s: %v", path, err)
-			return true, nil
+			klog.Warningf("Corrupted mount point detected for %s: %v — force lazy unmount", path, err)
+			if uerr := lazyUnmount(path); uerr != nil {
+				klog.Errorf("lazy unmount failed for %s: %v", path, uerr)
+				return false, uerr
+			}
+			return false, nil
 		}
 
 		klog.Errorf("Error checking mount point %s: %v", path, err)
@@ -247,10 +270,47 @@ func (ns *nodeServer) deleteMountPoint(path string) error {
 	}
 
 	if isMount {
-		err = ns.mounter.Unmount(path)
-		if err != nil {
-			return err
+		if err := ns.mounter.Unmount(path); err != nil {
+			klog.Warningf("Unmount %s failed: %v — falling back to lazy unmount", path, err)
+			if lerr := lazyUnmount(path); lerr != nil {
+				return fmt.Errorf("unmount failed: %w; lazy unmount also failed: %w", err, lerr)
+			}
 		}
 	}
 	return os.RemoveAll(path)
+}
+
+// lazyUnmount runs `umount -l` to detach a mount whose backing device is gone or wedged.
+// MNT_DETACH removes the mount from the namespace immediately; pending I/O continues
+// to drain on already-open handles but new accesses fail clean.
+func lazyUnmount(path string) error {
+	out, err := exec.New().Command("umount", "-l", path).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("umount -l %s: %w (%s)", path, err, string(out))
+	}
+	return nil
+}
+
+// bestEffortFstrim trims unused blocks at path. Failures (EIO, timeout, not
+// mounted) are logged and swallowed — fstrim must never block unpublish.
+func (ns *nodeServer) bestEffortFstrim(path string) {
+	isMount, err := ns.mounter.IsMountPoint(path)
+	if err != nil || !isMount {
+		klog.V(5).Infof("skipping fstrim on %s (mounted=%v err=%v)", path, isMount, err)
+		return
+	}
+	// Probe FS health: a wedged ext4 over a dead NVMe controller returns EIO
+	// on stat. Skipping fstrim in that case avoids hanging on the trim ioctl.
+	if _, statErr := os.Stat(path); statErr != nil {
+		klog.Warningf("skipping fstrim on %s: stat failed: %v", path, statErr)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.New().CommandContext(ctx, "fstrim", path).CombinedOutput()
+	if err != nil {
+		klog.Warningf("fstrim %s failed (best-effort): %v: %s", path, err, strings.TrimSpace(string(out)))
+		return
+	}
+	klog.Infof("fstrim %s: %s", path, strings.TrimSpace(string(out)))
 }

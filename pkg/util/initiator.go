@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -82,10 +83,21 @@ func NewMGXCsiInitiator(volumeContext map[string]string) (MGXCsiInitiator, error
 func (nvmf *initiatorNVMf) Connect(nrIoQueues, queueSize int) (string, error) {
 	klog.Info("connect to ", nvmf.nqn)
 
-	alreadyConnected, err := isNqnConnected(nvmf.nqn)
+	connected, live, err := nvmeSubsysStatus(nvmf.nqn)
 	if err != nil {
 		klog.Errorf("Failed to check existing connections: %v", err)
 		return "", err
+	}
+
+	// Subsystem present but no controller is in `live` state — the connection
+	// is degraded (resetting/connecting/dead). Tear it down so we can rebuild
+	// from a clean state instead of inheriting the bad controller.
+	if connected && !live {
+		klog.Warningf("NQN %s present but no live controller — forcing disconnect before reconnect", nvmf.nqn)
+		if derr := nvmf.Disconnect(); derr != nil {
+			klog.Warningf("forced disconnect of %s failed: %v (continuing)", nvmf.nqn, derr)
+		}
+		connected = false
 	}
 
 	var (
@@ -93,7 +105,7 @@ func (nvmf *initiatorNVMf) Connect(nrIoQueues, queueSize int) (string, error) {
 		connection *LvolResp
 	)
 
-	if !alreadyConnected {
+	if !connected {
 		mgxClient, err = NewMGXClient()
 		if err != nil {
 			klog.Errorf("failed to create mgx client: %v", err)
@@ -197,27 +209,47 @@ func execWithTimeout(cmdLine []string, timeout int) error {
 	return err
 }
 
-func isNqnConnected(nqn string) (bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "nvme", "list-subsys")
-
-	output, err := cmd.Output()
+// nvmeSubsysStatus walks /sys/class/nvme-subsystem to find a subsystem with the
+// given NQN, and reports both whether it is present (connected) and whether at
+// least one of its controllers is in the `live` state.
+//
+// Knowing the controller state is what lets the caller distinguish a healthy
+// connection (skip reconnect) from a degraded one (controller hung in
+// `connecting`/`resetting`/`dead`) where we must force a disconnect+reconnect
+// instead of inheriting the broken controller.
+func nvmeSubsysStatus(nqn string) (connected, live bool, err error) {
+	subsysDirs, err := filepath.Glob("/sys/class/nvme-subsystem/nvme-subsys*")
 	if err != nil {
-		return false, fmt.Errorf("failed to execute nvme list-subsys: %w", err)
+		return false, false, fmt.Errorf("glob nvme-subsystem: %w", err)
 	}
+	for _, dir := range subsysDirs {
+		nqnBytes, rerr := os.ReadFile(filepath.Join(dir, "subsysnqn"))
+		if rerr != nil {
+			continue
+		}
+		if strings.TrimSpace(string(nqnBytes)) != nqn {
+			continue
+		}
+		connected = true
 
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.Contains(line, nqn) {
-			parts := strings.Fields(line)
-			if len(parts) > 0 {
-				return true, nil
+		ctrlDirs, gerr := filepath.Glob(filepath.Join(dir, "nvme*"))
+		if gerr != nil {
+			return connected, false, fmt.Errorf("glob controllers under %s: %w", dir, gerr)
+		}
+		for _, ctrl := range ctrlDirs {
+			stateBytes, rerr := os.ReadFile(filepath.Join(ctrl, "state"))
+			if rerr != nil {
+				continue
+			}
+			state := strings.TrimSpace(string(stateBytes))
+			klog.V(5).Infof("nvme controller %s state=%s", ctrl, state)
+			if state == "live" {
+				return connected, true, nil
 			}
 		}
+		return connected, false, nil
 	}
-	return false, nil
+	return false, false, nil
 }
 
 func execWithTimeoutRetry(cmdLine []string, timeout, retry int) (err error) {
