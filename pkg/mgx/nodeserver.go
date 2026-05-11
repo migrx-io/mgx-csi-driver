@@ -73,11 +73,13 @@ func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
+	klog.Infof("NodePublishVolume: connecting NVMe target, volumeID: %s targetPath: %s", volumeID, targetPath)
 	devicePath, err := initiator.Connect(ns.conf.NrIoQueues, ns.conf.QueueSize) // idempotent
 	if err != nil {
 		klog.Errorf("failed to connect initiator, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+	klog.Infof("NodePublishVolume: NVMe connected, volumeID: %s devicePath: %s", volumeID, devicePath)
 	defer func() {
 		if err != nil {
 			initiator.Disconnect() //nolint:errcheck // best-effort rollback after publish failure; surfaced error already logged
@@ -90,11 +92,15 @@ func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 	}
 	if !mounted {
 		mntFlags := vc.GetMount().GetMountFlags()
+		klog.Infof("NodePublishVolume: formatting+mounting, volumeID: %s device: %s -> %s flags: %v", volumeID, devicePath, targetPath, mntFlags)
 		sfMounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
 		if err = sfMounter.FormatAndMount(devicePath, targetPath, "ext4", mntFlags); err != nil {
 			klog.Errorf("failed to format and mount device, volumeID: %s err: %v", volumeID, err)
 			return nil, status.Error(codes.Internal, err.Error())
 		}
+		klog.Infof("NodePublishVolume: mounted, volumeID: %s device: %s -> %s", volumeID, devicePath, targetPath)
+	} else {
+		klog.Infof("NodePublishVolume: target already mounted, volumeID: %s targetPath: %s", volumeID, targetPath)
 	}
 
 	volumeContext["devicePath"] = devicePath
@@ -103,6 +109,7 @@ func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
+	klog.Infof("NodePublishVolume: success, volumeID: %s targetPath: %s devicePath: %s", volumeID, targetPath, devicePath)
 	return &csi.NodePublishVolumeResponse{}, nil
 }
 
@@ -113,6 +120,8 @@ func (ns *nodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpubl
 
 	targetPath := req.GetTargetPath()
 	contextPath := filepath.Dir(targetPath)
+
+	klog.Infof("NodeUnpublishVolume: start, volumeID: %s targetPath: %s", volumeID, targetPath)
 
 	volumeContext, ctxErr := util.LookupVolumeContext(contextPath)
 	if ctxErr != nil {
@@ -127,9 +136,12 @@ func (ns *nodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpubl
 	// Always attempt unmount AND disconnect, regardless of which fails first.
 	// A stuck filesystem (EIO from a dead NVMe-oF controller) must not prevent
 	// the controller teardown — otherwise the next NodePublish reuses stale state.
+	klog.Infof("NodeUnpublishVolume: unmounting, volumeID: %s targetPath: %s", volumeID, targetPath)
 	unmountErr := ns.deleteMountPoint(targetPath)
 	if unmountErr != nil {
 		klog.Errorf("failed to unmount target path, volumeID: %s err: %v (continuing to disconnect)", volumeID, unmountErr)
+	} else {
+		klog.Infof("NodeUnpublishVolume: unmounted, volumeID: %s targetPath: %s", volumeID, targetPath)
 	}
 
 	if volumeContext != nil {
@@ -141,6 +153,7 @@ func (ns *nodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpubl
 			}
 			return nil, status.Error(codes.Internal, err.Error())
 		}
+		klog.Infof("NodeUnpublishVolume: disconnecting NVMe target, volumeID: %s", volumeID)
 		if err := initiator.Disconnect(); err != nil { // idempotent
 			klog.Errorf("failed to disconnect initiator, volumeID: %s err: %v", volumeID, err)
 			if unmountErr != nil {
@@ -148,6 +161,7 @@ func (ns *nodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpubl
 			}
 			return nil, status.Error(codes.Internal, err.Error())
 		}
+		klog.Infof("NodeUnpublishVolume: NVMe disconnected, volumeID: %s", volumeID)
 	}
 
 	if unmountErr != nil {
@@ -159,6 +173,7 @@ func (ns *nodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpubl
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
+	klog.Infof("NodeUnpublishVolume: success, volumeID: %s targetPath: %s", volumeID, targetPath)
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 
@@ -229,18 +244,6 @@ func (ns *nodeServer) createMountPoint(path string) (bool, error) {
 			klog.Infof("Created mount point path: %s", path)
 			return false, nil
 		}
-
-		// Corrupted mount (e.g., orphaned after NVMe-oF controller loss).
-		// Force lazy-unmount so the publish path can mount fresh.
-		if mount.IsCorruptedMnt(err) {
-			klog.Warningf("Corrupted mount point detected for %s: %v — force lazy unmount", path, err)
-			if uerr := lazyUnmount(path); uerr != nil {
-				klog.Errorf("lazy unmount failed for %s: %v", path, uerr)
-				return false, uerr
-			}
-			return false, nil
-		}
-
 		klog.Errorf("Error checking mount point %s: %v", path, err)
 		return false, err
 	}
@@ -260,35 +263,17 @@ func (ns *nodeServer) deleteMountPoint(path string) error {
 		if os.IsNotExist(err) {
 			klog.Infof("%s already deleted", path)
 			return nil
-		} else if mount.IsCorruptedMnt(err) {
-			klog.Warningf("Corrupted mount point detected at %s", path)
-			isMount = true
-		} else {
-			klog.Errorf("Error checking mount point %s: %v", path, err)
-			return err
 		}
+		klog.Errorf("Error checking mount point %s: %v", path, err)
+		return err
 	}
 
 	if isMount {
 		if err := ns.mounter.Unmount(path); err != nil {
-			klog.Warningf("Unmount %s failed: %v — falling back to lazy unmount", path, err)
-			if lerr := lazyUnmount(path); lerr != nil {
-				return fmt.Errorf("unmount failed: %w; lazy unmount also failed: %w", err, lerr)
-			}
+			return fmt.Errorf("unmount %s: %w", path, err)
 		}
 	}
 	return os.RemoveAll(path)
-}
-
-// lazyUnmount runs `umount -l` to detach a mount whose backing device is gone or wedged.
-// MNT_DETACH removes the mount from the namespace immediately; pending I/O continues
-// to drain on already-open handles but new accesses fail clean.
-func lazyUnmount(path string) error {
-	out, err := exec.New().Command("umount", "-l", path).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("umount -l %s: %w (%s)", path, err, string(out))
-	}
-	return nil
 }
 
 // bestEffortFstrim trims unused blocks at path. Failures (EIO, timeout, not

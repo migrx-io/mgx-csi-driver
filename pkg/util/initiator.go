@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"k8s.io/klog"
@@ -205,47 +203,84 @@ func execWithTimeout(cmdLine []string, timeout int) error {
 	return err
 }
 
-// nvmeSubsysStatus walks /sys/class/nvme-subsystem to find a subsystem with the
-// given NQN, and reports both whether it is present (connected) and whether at
-// least one of its controllers is in the `live` state.
+// nvmeSubsysStatus invokes `nvme list-subsys -o json` to find a subsystem with
+// the given NQN, and reports both whether it is present (connected) and whether
+// at least one of its paths is in the `live` state.
 //
-// Knowing the controller state is what lets the caller distinguish a healthy
+// Knowing the path state is what lets the caller distinguish a healthy
 // connection (skip reconnect) from a degraded one (controller hung in
 // `connecting`/`resetting`/`dead`) where we must force a disconnect+reconnect
 // instead of inheriting the broken controller.
 func nvmeSubsysStatus(nqn string) (connected, live bool, err error) {
-	subsysDirs, err := filepath.Glob("/sys/class/nvme-subsystem/nvme-subsys*")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, "nvme", "list-subsys", "-o", "json").Output()
 	if err != nil {
-		return false, false, fmt.Errorf("glob nvme-subsystem: %w", err)
+		return false, false, fmt.Errorf("nvme list-subsys: %w", err)
 	}
-	for _, dir := range subsysDirs {
-		nqnBytes, rerr := os.ReadFile(filepath.Join(dir, "subsysnqn"))
-		if rerr != nil {
-			continue
-		}
-		if strings.TrimSpace(string(nqnBytes)) != nqn {
+
+	subs, err := parseListSubsys(out)
+	if err != nil {
+		return false, false, fmt.Errorf("parse nvme list-subsys output: %w", err)
+	}
+
+	for _, s := range subs {
+		if s.NQN != nqn {
 			continue
 		}
 		connected = true
-
-		ctrlDirs, gerr := filepath.Glob(filepath.Join(dir, "nvme*"))
-		if gerr != nil {
-			return connected, false, fmt.Errorf("glob controllers under %s: %w", dir, gerr)
-		}
-		for _, ctrl := range ctrlDirs {
-			stateBytes, rerr := os.ReadFile(filepath.Join(ctrl, "state"))
-			if rerr != nil {
-				continue
-			}
-			state := strings.TrimSpace(string(stateBytes))
-			klog.V(5).Infof("nvme controller %s state=%s", ctrl, state)
-			if state == "live" {
+		for _, p := range s.Paths {
+			klog.V(5).Infof("nvme path %s state=%s", p.Name, p.State)
+			if p.State == "live" {
 				return connected, true, nil
 			}
 		}
 		return connected, false, nil
 	}
 	return false, false, nil
+}
+
+type nvmeSubsystem struct {
+	Name  string     `json:"Name"`
+	NQN   string     `json:"NQN"`
+	Paths []nvmePath `json:"Paths"`
+}
+
+type nvmePath struct {
+	Name      string `json:"Name"`
+	Transport string `json:"Transport"`
+	Address   string `json:"Address"`
+	State     string `json:"State"`
+}
+
+// parseListSubsys handles the two known shapes of `nvme list-subsys -o json`:
+//
+//  1. Newer nvme-cli (host-grouped):
+//     [ { "HostNQN": "...", "Subsystems": [ {...} ] } ]
+//  2. Older nvme-cli (flat):
+//     { "Subsystems": [ {...} ] }
+func parseListSubsys(raw []byte) ([]nvmeSubsystem, error) {
+	// Try host-grouped form first.
+	var hosts []struct {
+		Subsystems []nvmeSubsystem `json:"Subsystems"`
+	}
+	if err := json.Unmarshal(raw, &hosts); err == nil {
+		var out []nvmeSubsystem
+		for _, h := range hosts {
+			out = append(out, h.Subsystems...)
+		}
+		return out, nil
+	}
+
+	// Fall back to flat form.
+	var flat struct {
+		Subsystems []nvmeSubsystem `json:"Subsystems"`
+	}
+	if err := json.Unmarshal(raw, &flat); err != nil {
+		return nil, err
+	}
+	return flat.Subsystems, nil
 }
 
 func execWithTimeoutRetry(cmdLine []string, timeout, retry int) (err error) {
