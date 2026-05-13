@@ -153,9 +153,11 @@ func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 	defer unlock()
 
 	vc := req.GetVolumeCapability()
-	if vc.GetAccessMode().GetMode() != csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER {
+	mode := vc.GetAccessMode().GetMode()
+	if mode != csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER &&
+		mode != csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER {
 		return nil, status.Error(codes.InvalidArgument,
-			"Only ReadWriteOnce (RWO) volumes is supported by this driver")
+			"Only ReadWriteOnce (RWO) and ReadWriteOncePod (RWOP) volumes are supported by this driver")
 	}
 
 	stagingTargetPath := req.GetStagingTargetPath()

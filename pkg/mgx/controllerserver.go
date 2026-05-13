@@ -45,9 +45,11 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	// --- reject unsupported access modes ---
 	for _, vc := range req.GetVolumeCapabilities() {
-		if vc.GetAccessMode().GetMode() != csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER {
+		mode := vc.GetAccessMode().GetMode()
+		if mode != csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER &&
+			mode != csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER {
 			return nil, status.Error(codes.InvalidArgument,
-				"Only ReadWriteOnce (RWO) is supported by this driver")
+				"Only ReadWriteOnce (RWO) and ReadWriteOncePod (RWOP) are supported by this driver")
 		}
 	}
 
