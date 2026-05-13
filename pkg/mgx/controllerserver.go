@@ -122,29 +122,28 @@ func (cs *controllerServer) UnIdleVolume(volumeID string) error {
 
 	klog.V(5).Info("mgxClient is created..")
 
-	// check if volume exists and STOPPED
 	volume, err := mgxClient.GetVolume(volumeID)
-
 	if err != nil {
 		klog.Errorf("failed to get volume, volumeID: %s err: %s", volumeID, err.Error())
 		return err
 	}
 
-	// if volume is STOPPED then start it first
-	if volume.Status != VolumeStatusReady {
-		klog.V(5).Infof("volume is not READY: %v", volume)
-
-		err = cs.startVolume(volumeID, mgxClient)
-		if err != nil {
-			klog.Errorf("failed to start volume, volumeID: %s err: %s", volumeID, err.Error())
-			return err
-		}
-
-		klog.Infof("volume is starting: %s", volumeID)
-		// reconcile
+	// Only un-idle volumes that are actually idle (STOPPED). Transient states
+	// (CLEANING, INIT, PENDING, STOPPING, DELETING) mean the backend is mid-flight
+	// — calling volume_start here would re-stamp the volume to INIT and force a
+	// full re-provisioning cycle, racing with whatever op is in progress. Most
+	// commonly this fired during a NodeUnpublishVolume volume_clean cycle.
+	if volume.Status != VolumeStatusStopped {
+		klog.V(5).Infof("UnIdleVolume: skipping, volumeID: %s status: %s", volumeID, volume.Status)
 		return nil
 	}
 
+	if err := cs.startVolume(volumeID, mgxClient); err != nil {
+		klog.Errorf("failed to start volume, volumeID: %s err: %s", volumeID, err.Error())
+		return err
+	}
+
+	klog.Infof("volume is starting: %s", volumeID)
 	return nil
 }
 
