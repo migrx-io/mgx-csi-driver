@@ -311,6 +311,21 @@ func (client *RPCClient) startVolume(lvolID string) error {
 	return err
 }
 
+func (client *RPCClient) cleanVolume(lvolID string) error {
+	params := map[string]any{
+		"name": lvolID,
+	}
+
+	klog.V(5).Infof("cleanVolume: %v", &params)
+
+	_, err := client.Call("storage", "volume_clean", &params)
+	if err != nil {
+		return err
+	}
+
+	return err
+}
+
 func (client *RPCClient) resizeVolume(lvolID string, updatedSize int64) error {
 	params := map[string]any{
 		"name": lvolID,

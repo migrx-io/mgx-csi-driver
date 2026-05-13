@@ -19,6 +19,11 @@ type Config struct {
 	CtrlLossTmo    int
 	FastIOFailTmo  int
 
+	// volume_clean polling: how often to GetVolume while waiting for READY,
+	// and the total wall-clock budget after which we give up and fail unpublish.
+	VolumeCleanPollIntervalSec int
+	VolumeCleanReadyTimeoutSec int
+
 	IsControllerServer bool
 	IsNodeServer       bool
 	IdleVolumeMin      int

@@ -288,9 +288,12 @@ func (ns *nodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpubl
 
 	targetPath := req.GetTargetPath()
 
-	// fstrim before unmount so the thin-provisioned backend can reclaim freed
-	// blocks on every pod restart. Best-effort: never blocks unpublish.
-	ns.bestEffortFstrim(targetPath)
+	// Snapshot bind-mount refs BEFORE unmounting target so we can tell whether
+	// another pod is already publishing the same volume (rolling update /
+	// recreate where the new pod's NodePublishVolume ran before our
+	// NodeUnpublishVolume). In that case we must not run volume_clean — it
+	// would tear down the live pod's I/O path.
+	stagingPath, otherPodMounts := ns.classifyMountRefs(targetPath)
 
 	klog.Infof("NodeUnpublishVolume: unmounting bind, volumeID: %s targetPath: %s", volumeID, targetPath)
 	if err := ns.deleteMountPoint(targetPath); err != nil {
@@ -298,8 +301,128 @@ func (ns *nodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpubl
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
+	if otherPodMounts > 0 {
+		klog.Infof("NodeUnpublishVolume: %d other pod mount(s) still bound to staging, skipping volume_clean, volumeID: %s", otherPodMounts, volumeID)
+		klog.Infof("NodeUnpublishVolume: success, volumeID: %s targetPath: %s", volumeID, targetPath)
+		return &csi.NodeUnpublishVolumeResponse{}, nil
+	}
+
+	if stagingPath == "" {
+		klog.Infof("NodeUnpublishVolume: no staging mount detected, skipping volume_clean, volumeID: %s", volumeID)
+		klog.Infof("NodeUnpublishVolume: success, volumeID: %s targetPath: %s", volumeID, targetPath)
+		return &csi.NodeUnpublishVolumeResponse{}, nil
+	}
+
+	if err := ns.cleanVolumeAfterUnpublish(volumeID, stagingPath); err != nil {
+		klog.Errorf("volume_clean cycle failed, volumeID: %s err: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
 	klog.Infof("NodeUnpublishVolume: success, volumeID: %s targetPath: %s", volumeID, targetPath)
 	return &csi.NodeUnpublishVolumeResponse{}, nil
+}
+
+// classifyMountRefs splits the bind-mount peers of targetPath into the staging
+// mount and any other pod target mounts. Other pod target mounts are an
+// overlap signal: another pod is already (or still) using the same volume on
+// this node, so we must skip the destructive clean cycle.
+//
+// Different volumes on the same node have different NVMe namespace devices,
+// so GetMountRefs (which keys on major:minor + root) only returns refs
+// belonging to this volume — multi-volume / multi-NVMe nodes are handled
+// implicitly without needing to filter by volumeID.
+func (ns *nodeServer) classifyMountRefs(targetPath string) (stagingPath string, otherPodMounts int) {
+	refs, err := ns.mounter.GetMountRefs(targetPath)
+	if err != nil {
+		klog.Warningf("GetMountRefs(%s) failed: %v", targetPath, err)
+		return "", 0
+	}
+	podsDir := kubeletPodsDir(targetPath)
+	for _, ref := range refs {
+		if ref == targetPath {
+			continue
+		}
+		if podsDir != "" && strings.HasPrefix(ref, podsDir) {
+			otherPodMounts++
+			klog.V(5).Infof("classifyMountRefs: other pod mount %s", ref)
+			continue
+		}
+		// First non-pod ref is the staging mount. Subsequent ones shouldn't
+		// exist in normal CSI flow; keep the first and log the rest.
+		if stagingPath == "" {
+			stagingPath = ref
+		} else {
+			klog.Warningf("classifyMountRefs: unexpected extra non-pod ref %s (already have staging %s)", ref, stagingPath)
+		}
+	}
+	return stagingPath, otherPodMounts
+}
+
+// kubeletPodsDir returns the kubelet per-pod root (e.g. /var/lib/kubelet/pods/)
+// derived from the CSI targetPath, which kubelet always shapes as
+// <root>/pods/<podUID>/volumes/kubernetes.io~csi/<pv>/mount. Deriving the
+// prefix instead of hard-coding it lets the driver work on clusters that run
+// kubelet with a custom --root-dir. Returns "" if targetPath doesn't contain
+// the expected "/pods/" segment.
+func kubeletPodsDir(targetPath string) string {
+	const segment = "/pods/"
+	idx := strings.Index(targetPath, segment)
+	if idx < 0 {
+		return ""
+	}
+	return targetPath[:idx+len(segment)]
+}
+
+// cleanVolumeAfterUnpublish unmounts the global staging mount, asks the
+// storage backend to clean the volume, then polls until the volume reports
+// READY. The next NodePublishVolume rebuilds staging via ensureStagingHealthy.
+func (ns *nodeServer) cleanVolumeAfterUnpublish(volumeID, stagingPath string) error {
+	klog.Infof("NodeUnpublishVolume: unmounting staging, volumeID: %s stagingPath: %s", volumeID, stagingPath)
+	if err := ns.deleteMountPoint(stagingPath); err != nil {
+		return fmt.Errorf("unmount staging %s: %w", stagingPath, err)
+	}
+
+	mgxClient, err := util.NewMGXClient()
+	if err != nil {
+		return fmt.Errorf("init mgx client: %w", err)
+	}
+
+	klog.Infof("NodeUnpublishVolume: calling volume_clean, volumeID: %s", volumeID)
+	if err := mgxClient.CleanVolume(volumeID); err != nil {
+		return fmt.Errorf("volume_clean: %w", err)
+	}
+
+	return ns.waitVolumeReady(volumeID, mgxClient)
+}
+
+// waitVolumeReady polls volume_get on cfg-tunable intervals until the volume
+// reports READY or the total timeout elapses.
+func (ns *nodeServer) waitVolumeReady(volumeID string, mgxClient *util.NodeNVMf) error {
+	interval := time.Duration(ns.conf.VolumeCleanPollIntervalSec) * time.Second
+	timeout := time.Duration(ns.conf.VolumeCleanReadyTimeoutSec) * time.Second
+	if interval <= 0 {
+		interval = 2 * time.Second
+	}
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		vol, err := mgxClient.GetVolume(volumeID)
+		if err != nil {
+			klog.Warningf("waitVolumeReady: GetVolume failed, volumeID: %s err: %v", volumeID, err)
+		} else if vol.Status == VolumeStatusReady {
+			klog.Infof("waitVolumeReady: volume READY, volumeID: %s", volumeID)
+			return nil
+		} else {
+			klog.V(5).Infof("waitVolumeReady: volume not READY yet, volumeID: %s status: %s", volumeID, vol.Status)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("volume %s did not reach READY within %s", volumeID, timeout)
+		}
+		time.Sleep(interval)
+	}
 }
 
 func (*nodeServer) NodeGetCapabilities(_ context.Context, _ *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
@@ -386,31 +509,6 @@ func (ns *nodeServer) createMountPoint(path string) (bool, error) {
 	}
 
 	return false, nil
-}
-
-// bestEffortFstrim trims unused blocks at path. Failures (EIO, timeout, not
-// mounted, discard unsupported) are logged and swallowed — fstrim must never
-// block unpublish.
-func (ns *nodeServer) bestEffortFstrim(path string) {
-	isMount, err := ns.mounter.IsMountPoint(path)
-	if err != nil || !isMount {
-		klog.V(5).Infof("skipping fstrim on %s (mounted=%v err=%v)", path, isMount, err)
-		return
-	}
-	// Probe FS health: a wedged ext4 over a dead NVMe controller returns EIO
-	// on stat. Skipping fstrim in that case avoids hanging on the trim ioctl.
-	if _, statErr := os.Stat(path); statErr != nil {
-		klog.Warningf("skipping fstrim on %s: stat failed: %v", path, statErr)
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	out, err := exec.New().CommandContext(ctx, "fstrim", path).CombinedOutput()
-	if err != nil {
-		klog.Warningf("fstrim %s failed (best-effort): %v: %s", path, err, strings.TrimSpace(string(out)))
-		return
-	}
-	klog.Infof("fstrim %s: %s", path, strings.TrimSpace(string(out)))
 }
 
 // unmount and delete mount point, must be idempotent

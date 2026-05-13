@@ -75,6 +75,8 @@ spec:
         - "--fast-io-fail-tmo={{ .Values.node.fastIoFailTmo }}"
         - "--ctrl-loss-tmo={{ .Values.node.ctrlLossTmo }}"
         - "--reconnect-delay={{ .Values.node.reconnectDelay }}"
+        - "--volume-clean-poll-interval={{ .Values.node.volumeCleanPollInterval }}"
+        - "--volume-clean-ready-timeout={{ .Values.node.volumeCleanReadyTimeout }}"
         - "--node"
         env:
         - name: NODE_ID

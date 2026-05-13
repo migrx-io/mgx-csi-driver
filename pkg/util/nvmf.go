@@ -107,6 +107,15 @@ func (node *NodeNVMf) StartVolume(lvolID string) error {
 	return nil
 }
 
+func (node *NodeNVMf) CleanVolume(lvolID string) error {
+	err := node.Client.cleanVolume(lvolID)
+	if err != nil {
+		return err
+	}
+	klog.V(5).Infof("volume clean: %s", lvolID)
+	return nil
+}
+
 func (node *NodeNVMf) ResizeVolume(lvolID string, updatedSize int64) error {
 	err := node.Client.resizeVolume(lvolID, updatedSize)
 	if err != nil {

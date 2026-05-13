@@ -86,6 +86,13 @@ node:
   fastIoFailTmo: 0
   ctrlLossTmo: 10
   reconnectDelay: 2
+  # volume_clean polling (seconds). After unmounting on pod restart the node
+  # calls storage.volume_clean and waits for volume_get to report READY before
+  # returning. volumeCleanPollInterval is the gap between GetVolume probes;
+  # volumeCleanReadyTimeout is the total wall-clock budget before unpublish
+  # fails and kubelet retries.
+  volumeCleanPollInterval: 2
+  volumeCleanReadyTimeout: 60
 
 # The single snapshot controller deployment works for all CSI drivers
 # in a cluster. So enable it only if you kubernetes cluster does not
