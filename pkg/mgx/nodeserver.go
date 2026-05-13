@@ -211,14 +211,19 @@ func (ns *nodeServer) ensureStagingHealthy(volumeID, stagingTargetPath, stagingP
 		return nil
 	}
 
-	klog.Warningf("staging unhealthy for volume %s, recovering", volumeID)
+	if h.deviceExists && !mount.IsCorruptedMnt(h.mountErr) {
+		klog.Infof("staging not mounted for volume %s, rebuilding (expected after volume_clean or pod restart)", volumeID)
+	} else {
+		klog.Warningf("staging unhealthy for volume %s (deviceExists=%v isMounted=%v mountErr=%v), recovering", volumeID, h.deviceExists, h.isMounted, h.mountErr)
+	}
 	return ns.recoverStaging(volumeID, stagingTargetPath, stagingParentPath, volumeContext, h.isMounted, h.mountErr)
 }
 
 type stagingHealthResult struct {
-	healthy   bool
-	isMounted bool
-	mountErr  error
+	healthy      bool
+	deviceExists bool
+	isMounted    bool
+	mountErr     error
 }
 
 // stagingHealth reports whether the staging mount + backing device look intact.
@@ -229,13 +234,14 @@ func (ns *nodeServer) stagingHealth(devicePath, stagingTargetPath string) (stagi
 
 	isMounted, mountErr := ns.mounter.IsMountPoint(stagingTargetPath)
 	if mountErr != nil && !os.IsNotExist(mountErr) && !mount.IsCorruptedMnt(mountErr) {
-		return stagingHealthResult{isMounted: isMounted, mountErr: mountErr}, mountErr
+		return stagingHealthResult{deviceExists: deviceExists, isMounted: isMounted, mountErr: mountErr}, mountErr
 	}
 
 	return stagingHealthResult{
-		healthy:   deviceExists && isMounted && mountErr == nil,
-		isMounted: isMounted,
-		mountErr:  mountErr,
+		healthy:      deviceExists && isMounted && mountErr == nil,
+		deviceExists: deviceExists,
+		isMounted:    isMounted,
+		mountErr:     mountErr,
 	}, nil
 }
 
