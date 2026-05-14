@@ -321,7 +321,13 @@ func (ns *nodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpubl
 		return &csi.NodeUnpublishVolumeResponse{}, nil
 	}
 
-	if err := ns.cleanVolumeAfterUnpublish(volumeID, stagingPath); err != nil {
+	if !ns.conf.VolumeCleanEnabled {
+		klog.Infof("NodeUnpublishVolume: volume_clean disabled, unmounting staging only, volumeID: %s stagingPath: %s", volumeID, stagingPath)
+		if err := ns.deleteMountPoint(stagingPath); err != nil {
+			klog.Errorf("failed to unmount staging path, volumeID: %s err: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+	} else if err := ns.cleanVolumeAfterUnpublish(volumeID, stagingPath); err != nil {
 		klog.Errorf("volume_clean cycle failed, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}

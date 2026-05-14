@@ -23,6 +23,9 @@ type Config struct {
 	// and the total wall-clock budget after which we give up and fail unpublish.
 	VolumeCleanPollIntervalSec int
 	VolumeCleanReadyTimeoutSec int
+	// When false, NodeUnpublishVolume only unmounts and skips the
+	// storage.volume_clean RPC + READY wait.
+	VolumeCleanEnabled bool
 
 	IsControllerServer bool
 	IsNodeServer       bool
