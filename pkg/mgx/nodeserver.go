@@ -170,6 +170,24 @@ func (ns *nodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpubl
 		return &csi.NodeUnpublishVolumeResponse{}, nil
 	}
 
+	// Ref-count guard: if any other pod on this node still has the
+	// volume's device mounted, we must not disconnect the NVMe controller
+	// or call volume_clean — both would yank I/O out from under the live
+	// pod. The last Unpublish (no peers left) does the teardown.
+	others, oerr := ns.otherPodMounts(targetPath, volumeContext["name"])
+	if oerr != nil {
+		klog.Warningf("NodeUnpublishVolume: otherPodMounts probe failed (assuming no peers): %v", oerr)
+	}
+	if len(others) > 0 {
+		klog.Infof("NodeUnpublishVolume: %d other pod mount(s) still using volume %s, skipping NVMe disconnect and volume_clean: %v", len(others), volumeID, others)
+		if err := util.CleanUpVolumeContext(targetParentPath); err != nil {
+			klog.Errorf("failed to clean up volume context, volumeID: %s err: %v", volumeID, err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		klog.Infof("NodeUnpublishVolume: success (peers remain), volumeID: %s targetPath: %s", volumeID, targetPath)
+		return &csi.NodeUnpublishVolumeResponse{}, nil
+	}
+
 	initiator, err := util.NewMGXCsiInitiator(volumeContext, ns.conf)
 	if err != nil {
 		klog.Errorf("failed to create mgx initiator, volumeID: %s err: %v", volumeID, err)
