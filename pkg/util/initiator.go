@@ -77,7 +77,7 @@ func NewMGXCsiInitiator(volumeContext map[string]string, conf *Config) (MGXCsiIn
 func (nvmf *initiatorNVMf) Connect(nrIoQueues, queueSize int) (string, error) {
 	klog.Info("connect to ", nvmf.nqn)
 
-	connected, live, err := nvmeSubsysStatus(nvmf.nqn)
+	connected, live, err := NvmeSubsysStatus(nvmf.nqn)
 	if err != nil {
 		klog.Errorf("Failed to check existing connections: %v", err)
 		return "", err
@@ -203,15 +203,16 @@ func execWithTimeout(cmdLine []string, timeout int) error {
 	return err
 }
 
-// nvmeSubsysStatus invokes `nvme list-subsys -o json` to find a subsystem with
+// NvmeSubsysStatus invokes `nvme list-subsys -o json` to find a subsystem with
 // the given NQN, and reports both whether it is present (connected) and whether
 // at least one of its paths is in the `live` state.
 //
 // Knowing the path state is what lets the caller distinguish a healthy
 // connection (skip reconnect) from a degraded one (controller hung in
 // `connecting`/`resetting`/`dead`) where we must force a disconnect+reconnect
-// instead of inheriting the broken controller.
-func nvmeSubsysStatus(nqn string) (connected, live bool, err error) {
+// instead of inheriting the broken controller. Exported so the node server
+// can probe controller health from its staging health check.
+func NvmeSubsysStatus(nqn string) (connected, live bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

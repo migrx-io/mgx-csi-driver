@@ -205,7 +205,7 @@ func (ns *nodeServer) ensureStagingHealthy(volumeID, stagingTargetPath, stagingP
 		return nil
 	}
 
-	h, err := ns.stagingHealth(volumeContext["devicePath"], stagingTargetPath)
+	h, err := ns.stagingHealth(volumeContext["devicePath"], volumeContext["nqn"], stagingTargetPath)
 	if err != nil {
 		return err
 	}
@@ -213,12 +213,17 @@ func (ns *nodeServer) ensureStagingHealthy(volumeID, stagingTargetPath, stagingP
 		return nil
 	}
 
-	if h.deviceExists && !mount.IsCorruptedMnt(h.mountErr) {
+	switch {
+	case h.nvmeDegraded:
+		klog.Warningf("staging unhealthy for volume %s: NVMe controller present but no live path (target may have failed), recovering", volumeID)
+	case h.readOnly:
+		klog.Warningf("staging unhealthy for volume %s: filesystem remounted read-only (likely ext4 errors=remount-ro after I/O errors), recovering", volumeID)
+	case h.deviceExists && !mount.IsCorruptedMnt(h.mountErr):
 		klog.Infof("staging not mounted for volume %s, rebuilding (expected after volume_clean or pod restart)", volumeID)
-	} else {
+	default:
 		klog.Warningf("staging unhealthy for volume %s (deviceExists=%v isMounted=%v mountErr=%v), recovering", volumeID, h.deviceExists, h.isMounted, h.mountErr)
 	}
-	return ns.recoverStaging(volumeID, stagingTargetPath, stagingParentPath, volumeContext, h.isMounted, h.mountErr)
+	return ns.recoverStaging(volumeID, stagingTargetPath, stagingParentPath, volumeContext, h)
 }
 
 type stagingHealthResult struct {
@@ -226,11 +231,28 @@ type stagingHealthResult struct {
 	deviceExists bool
 	isMounted    bool
 	mountErr     error
+	// nvmeDegraded is true when the NVMe subsystem is present but no path is
+	// in the `live` state — controller is in connecting/resetting/dead state,
+	// I/O blocks or returns EIO, but /dev still has the device node so the
+	// cheap os.Stat / IsMountPoint checks lie.
+	nvmeDegraded bool
+	// readOnly is true when the staging mount appears in /proc/mounts with the
+	// `ro` flag despite being staged read-write. ext4 with errors=remount-ro
+	// flips here after an I/O error and stays read-only even if the NVMe
+	// controller later reconnects, so we must unmount+remount to recover.
+	readOnly bool
 }
 
 // stagingHealth reports whether the staging mount + backing device look intact.
 // A non-nil error means the mount probe itself failed with a non-recoverable error.
-func (ns *nodeServer) stagingHealth(devicePath, stagingTargetPath string) (stagingHealthResult, error) {
+//
+// Beyond the cheap inode/mountinfo checks, it also probes:
+//   - NVMe controller path state (`live` vs connecting/dead) — catches the
+//     case where the SPDK target died but ctrl-loss-tmo keeps the host's
+//     /dev node alive in a broken state.
+//   - Mount RO flag in /proc/mounts — catches the case where ext4 has
+//     remounted itself read-only after I/O errors.
+func (ns *nodeServer) stagingHealth(devicePath, nqn, stagingTargetPath string) (stagingHealthResult, error) {
 	_, deviceErr := os.Stat(devicePath)
 	deviceExists := deviceErr == nil
 
@@ -239,18 +261,69 @@ func (ns *nodeServer) stagingHealth(devicePath, stagingTargetPath string) (stagi
 		return stagingHealthResult{deviceExists: deviceExists, isMounted: isMounted, mountErr: mountErr}, mountErr
 	}
 
-	return stagingHealthResult{
-		healthy:      deviceExists && isMounted && mountErr == nil,
+	res := stagingHealthResult{
 		deviceExists: deviceExists,
 		isMounted:    isMounted,
 		mountErr:     mountErr,
-	}, nil
+	}
+
+	if nqn != "" {
+		connected, live, nerr := util.NvmeSubsysStatus(nqn)
+		if nerr != nil {
+			// Best-effort: a failed list-subsys probe shouldn't mask the rest
+			// of the health check. Log and treat as not-degraded.
+			klog.Warningf("NvmeSubsysStatus(%s) failed during staging health check: %v", nqn, nerr)
+		} else if connected && !live {
+			res.nvmeDegraded = true
+		}
+	}
+
+	if isMounted && mountErr == nil {
+		ro, roErr := ns.isStagingReadOnly(stagingTargetPath)
+		if roErr != nil {
+			klog.Warningf("read-only probe for %s failed: %v", stagingTargetPath, roErr)
+		} else {
+			res.readOnly = ro
+		}
+	}
+
+	res.healthy = deviceExists && isMounted && mountErr == nil && !res.nvmeDegraded && !res.readOnly
+	return res, nil
+}
+
+// isStagingReadOnly scans /proc/mounts (via mount-utils) for the staging path
+// and reports whether the kernel has it flagged `ro`. ext4 with the default
+// errors=remount-ro silently flips to ro on the first I/O error; subsequent
+// pods that bind-mount through staging inherit that ro state and the workload
+// fails with EROFS even after the underlying device recovers.
+func (ns *nodeServer) isStagingReadOnly(path string) (bool, error) {
+	mps, err := ns.mounter.List()
+	if err != nil {
+		return false, err
+	}
+	for i := range mps {
+		if mps[i].Path != path {
+			continue
+		}
+		for _, opt := range mps[i].Opts {
+			if opt == "ro" {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	return false, nil
 }
 
 func (ns *nodeServer) recoverStaging(volumeID, stagingTargetPath, stagingParentPath string,
-	volumeContext map[string]string, isMounted bool, mountErr error,
+	volumeContext map[string]string, h stagingHealthResult,
 ) error {
-	if isMounted || mount.IsCorruptedMnt(mountErr) {
+	// Unmount when the mount exists in any form OR when our deeper probes
+	// flagged it as degraded — even though the kernel still considers it a
+	// mount, the underlying device or filesystem is broken and bind-mounting
+	// pods onto it would inherit the failure.
+	forceUnmount := h.isMounted || mount.IsCorruptedMnt(h.mountErr) || h.nvmeDegraded || h.readOnly
+	if forceUnmount {
 		if uerr := ns.deleteMountPoint(stagingTargetPath); uerr != nil {
 			klog.Warningf("failed to clean staging mount during recovery for volume %s: %v", volumeID, uerr)
 		}
