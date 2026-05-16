@@ -2,9 +2,7 @@ package mgx
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,126 +27,31 @@ type nodeServer struct {
 }
 
 func newNodeServer(d *csicommon.CSIDriver, conf *util.Config) *nodeServer {
-	ns := &nodeServer{
+	return &nodeServer{
 		DefaultNodeServer: csicommon.NewDefaultNodeServer(d),
 		mounter:           mount.New(""),
 		volumeLocks:       util.NewVolumeLocks(),
 		conf:              conf,
 	}
-
-	return ns
 }
 
 func (ns *nodeServer) NodeGetInfo(_ context.Context, _ *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
-	response := &csi.NodeGetInfoResponse{
+	return &csi.NodeGetInfoResponse{
 		NodeId: ns.Driver.GetNodeID(),
-	}
-
-	return response, nil
+	}, nil
 }
 
-func (ns *nodeServer) NodeStageVolume(_ context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
-	volumeID := req.GetVolumeId()
-	unlock := ns.volumeLocks.Lock(volumeID)
-	defer unlock()
-
-	stagingTargetPath := req.GetStagingTargetPath()
-	stagingParentPath := filepath.Dir(stagingTargetPath)
-	volumeContext := req.GetVolumeContext()
-
-	klog.Infof("NodeStageVolume: start, volumeID: %s stagingTargetPath: %s", volumeID, stagingTargetPath)
-
-	initiator, err := util.NewMGXCsiInitiator(volumeContext, ns.conf)
-	if err != nil {
-		klog.Errorf("failed to create mgx initiator, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	klog.Infof("NodeStageVolume: connecting NVMe target, volumeID: %s", volumeID)
-	devicePath, err := initiator.Connect(ns.conf.NrIoQueues, ns.conf.QueueSize) // idempotent
-	if err != nil {
-		klog.Errorf("failed to connect initiator, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	klog.Infof("NodeStageVolume: NVMe connected, volumeID: %s devicePath: %s", volumeID, devicePath)
-	defer func() {
-		if err != nil {
-			initiator.Disconnect() //nolint:errcheck // best-effort rollback after stage failure; surfaced error already logged
-		}
-	}()
-
-	mounted, err := ns.createMountPoint(stagingTargetPath)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	if !mounted {
-		mntFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
-		klog.Infof("NodeStageVolume: formatting+mounting, volumeID: %s device: %s -> %s flags: %v", volumeID, devicePath, stagingTargetPath, mntFlags)
-		sfMounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
-		if err = sfMounter.FormatAndMount(devicePath, stagingTargetPath, "ext4", mntFlags); err != nil {
-			klog.Errorf("failed to format and mount device, volumeID: %s err: %v", volumeID, err)
-			return nil, status.Error(codes.Internal, err.Error())
-		}
-		klog.Infof("NodeStageVolume: mounted, volumeID: %s device: %s -> %s", volumeID, devicePath, stagingTargetPath)
-	} else {
-		klog.Infof("NodeStageVolume: staging path already mounted, volumeID: %s stagingTargetPath: %s", volumeID, stagingTargetPath)
-	}
-
-	volumeContext["devicePath"] = devicePath
-	if err = util.StashVolumeContext(volumeContext, stagingParentPath); err != nil {
-		klog.Errorf("failed to stash volume context, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	klog.Infof("NodeStageVolume: success, volumeID: %s stagingTargetPath: %s devicePath: %s", volumeID, stagingTargetPath, devicePath)
-	return &csi.NodeStageVolumeResponse{}, nil
-}
-
-func (ns *nodeServer) NodeUnstageVolume(_ context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
-	volumeID := req.GetVolumeId()
-	unlock := ns.volumeLocks.Lock(volumeID)
-	defer unlock()
-
-	stagingTargetPath := req.GetStagingTargetPath()
-	stagingParentPath := filepath.Dir(stagingTargetPath)
-
-	klog.Infof("NodeUnstageVolume: start, volumeID: %s stagingTargetPath: %s", volumeID, stagingTargetPath)
-
-	volumeContext, ctxErr := util.LookupVolumeContext(stagingParentPath)
-	if ctxErr != nil {
-		klog.Warningf("no volume context for volume %s, skipping disconnect: %v", volumeID, ctxErr)
-	}
-
-	klog.Infof("NodeUnstageVolume: unmounting, volumeID: %s stagingTargetPath: %s", volumeID, stagingTargetPath)
-	if err := ns.deleteMountPoint(stagingTargetPath); err != nil {
-		klog.Errorf("failed to unmount staging path, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-	klog.Infof("NodeUnstageVolume: unmounted, volumeID: %s stagingTargetPath: %s", volumeID, stagingTargetPath)
-
-	if volumeContext != nil {
-		initiator, err := util.NewMGXCsiInitiator(volumeContext, ns.conf)
-		if err != nil {
-			klog.Errorf("failed to create mgx initiator, volumeID: %s err: %v", volumeID, err)
-			return nil, status.Error(codes.Internal, err.Error())
-		}
-		klog.Infof("NodeUnstageVolume: disconnecting NVMe target, volumeID: %s", volumeID)
-		if err := initiator.Disconnect(); err != nil { // idempotent
-			klog.Errorf("failed to disconnect initiator, volumeID: %s err: %v", volumeID, err)
-			return nil, status.Error(codes.Internal, err.Error())
-		}
-		klog.Infof("NodeUnstageVolume: NVMe disconnected, volumeID: %s", volumeID)
-
-		if err := util.CleanUpVolumeContext(stagingParentPath); err != nil {
-			klog.Errorf("failed to clean up volume context, volumeID: %s err: %v", volumeID, err)
-			return nil, status.Error(codes.Internal, err.Error())
-		}
-	}
-
-	klog.Infof("NodeUnstageVolume: success, volumeID: %s stagingTargetPath: %s", volumeID, stagingTargetPath)
-	return &csi.NodeUnstageVolumeResponse{}, nil
-}
-
+// NodePublishVolume does the full per-pod setup in one step: tear down any
+// prior mount/connection for this volume on this node, then connect NVMe
+// and mount the device directly at the kubelet target path. The driver
+// does not advertise STAGE_UNSTAGE_VOLUME, so there is no shared staging
+// mount to inherit stale or broken state from a previous pod.
+//
+// Rolling-update overlap is handled by the otherPodMounts check: if another
+// pod on this node still has the volume mounted (kubelet ordered our
+// Publish before its Unpublish), we return Aborted so kubelet retries.
+// On retry, the outgoing pod's NodeUnpublishVolume has freed the device
+// and we proceed without ever yanking I/O out from under the live pod.
 func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	unlock := ns.volumeLocks.Lock(volumeID)
@@ -162,358 +65,194 @@ func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 			"Only ReadWriteOnce (RWO) and ReadWriteOncePod (RWOP) volumes are supported by this driver")
 	}
 
-	stagingTargetPath := req.GetStagingTargetPath()
-	stagingParentPath := filepath.Dir(stagingTargetPath)
 	targetPath := req.GetTargetPath()
+	targetParentPath := filepath.Dir(targetPath)
+	volumeContext := req.GetVolumeContext()
 
-	if err := ns.ensureStagingHealthy(volumeID, stagingTargetPath, stagingParentPath); err != nil {
-		klog.Errorf("failed to recover staging, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
+	klog.Infof("NodePublishVolume: start, volumeID: %s targetPath: %s", volumeID, targetPath)
 
-	klog.Infof("NodePublishVolume: bind-mounting, volumeID: %s %s -> %s", volumeID, stagingTargetPath, targetPath)
-
-	mounted, err := ns.createMountPoint(targetPath)
-	if err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
+	others, oerr := ns.otherPodMounts(targetPath, volumeContext["name"])
+	if oerr != nil {
+		klog.Warningf("NodePublishVolume: otherPodMounts probe failed (continuing): %v", oerr)
 	}
-	if mounted {
-		klog.Infof("NodePublishVolume: target already bind-mounted, volumeID: %s targetPath: %s", volumeID, targetPath)
-		return &csi.NodePublishVolumeResponse{}, nil
-	}
-
-	if err := ns.mounter.Mount(stagingTargetPath, targetPath, "", []string{"bind"}); err != nil {
-		klog.Errorf("failed to bind-mount, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	klog.Infof("NodePublishVolume: success, volumeID: %s targetPath: %s", volumeID, targetPath)
-	return &csi.NodePublishVolumeResponse{}, nil
-}
-
-// ensureStagingHealthy probes the staging mount and the underlying NVMe device.
-// If either is gone or corrupted, it tears down the broken state and rebuilds
-// the staging mount so that a pod restart (Unpublish → Publish) can recover
-// without waiting for ref-count to drop to zero and trigger Unstage.
-//
-// Kubelet only calls NodeStageVolume once per volume per node — so without
-// this, a SPDK target restart that orphans the NVMe controller leaves staging
-// wedged and every subsequent pod inherits the broken mount.
-func (ns *nodeServer) ensureStagingHealthy(volumeID, stagingTargetPath, stagingParentPath string) error {
-	volumeContext, err := util.LookupVolumeContext(stagingParentPath)
-	if err != nil {
-		// No stashed context means Stage was never completed; nothing to recover here.
-		klog.V(5).Infof("skipping staging health check for volume %s: %v", volumeID, err)
-		return nil
-	}
-
-	h, err := ns.stagingHealth(volumeContext["devicePath"], volumeContext["nqn"], stagingTargetPath)
-	if err != nil {
-		return err
-	}
-	if h.healthy {
-		return nil
-	}
-
-	switch {
-	case h.nvmeDegraded:
-		klog.Warningf("staging unhealthy for volume %s: NVMe controller present but no live path (target may have failed), recovering", volumeID)
-	case h.ioError:
-		klog.Warningf("staging unhealthy for volume %s: active I/O probe returned EIO (NVMe path live but backend not serving I/O), recovering", volumeID)
-	case h.readOnly:
-		klog.Warningf("staging unhealthy for volume %s: filesystem remounted read-only (likely ext4 errors=remount-ro after I/O errors), recovering", volumeID)
-	case h.deviceExists && !mount.IsCorruptedMnt(h.mountErr):
-		klog.Infof("staging not mounted for volume %s, rebuilding (expected after volume_clean or pod restart)", volumeID)
-	default:
-		klog.Warningf("staging unhealthy for volume %s (deviceExists=%v isMounted=%v mountErr=%v), recovering", volumeID, h.deviceExists, h.isMounted, h.mountErr)
-	}
-	return ns.recoverStaging(volumeID, stagingTargetPath, stagingParentPath, volumeContext, h)
-}
-
-type stagingHealthResult struct {
-	healthy      bool
-	deviceExists bool
-	isMounted    bool
-	mountErr     error
-	// nvmeDegraded is true when the NVMe subsystem is present but no path is
-	// in the `live` state — controller is in connecting/resetting/dead state,
-	// I/O blocks or returns EIO, but /dev still has the device node so the
-	// cheap os.Stat / IsMountPoint checks lie.
-	nvmeDegraded bool
-	// readOnly is true when the staging mount appears in /proc/mounts with the
-	// `ro` flag despite being staged read-write. ext4 with errors=remount-ro
-	// flips here after an I/O error and stays read-only even if the NVMe
-	// controller later reconnects, so we must unmount+remount to recover.
-	readOnly bool
-	// ioError is true when an active read against the staging mount root
-	// returned EIO/ESTALE/etc. Catches the case where NVMe stays `live`
-	// and ext4 hasn't flipped to ro yet, but every actual read/write
-	// against the backend returns I/O error — passive stat-based checks
-	// miss this entirely.
-	ioError bool
-}
-
-// stagingHealth reports whether the staging mount + backing device look intact.
-// A non-nil error means the mount probe itself failed with a non-recoverable error.
-//
-// Beyond the cheap inode/mountinfo checks, it also probes:
-//   - NVMe controller path state (`live` vs connecting/dead) — catches the
-//     case where the SPDK target died but ctrl-loss-tmo keeps the host's
-//     /dev node alive in a broken state.
-//   - Mount RO flag in /proc/mounts — catches the case where ext4 has
-//     remounted itself read-only after I/O errors.
-func (ns *nodeServer) stagingHealth(devicePath, nqn, stagingTargetPath string) (stagingHealthResult, error) {
-	_, deviceErr := os.Stat(devicePath)
-	deviceExists := deviceErr == nil
-
-	isMounted, mountErr := ns.mounter.IsMountPoint(stagingTargetPath)
-	if mountErr != nil && !os.IsNotExist(mountErr) && !mount.IsCorruptedMnt(mountErr) {
-		return stagingHealthResult{deviceExists: deviceExists, isMounted: isMounted, mountErr: mountErr}, mountErr
-	}
-
-	res := stagingHealthResult{
-		deviceExists: deviceExists,
-		isMounted:    isMounted,
-		mountErr:     mountErr,
-		nvmeDegraded: probeNvmeDegraded(nqn),
-	}
-
-	if isMounted && mountErr == nil {
-		res.readOnly = ns.probeReadOnly(stagingTargetPath)
-		res.ioError = probeIOError(stagingTargetPath)
-	}
-
-	res.healthy = deviceExists && isMounted && mountErr == nil && !res.nvmeDegraded && !res.readOnly && !res.ioError
-	return res, nil
-}
-
-// probeNvmeDegraded reports whether the NVMe subsystem for nqn is connected
-// but lacks any `live` path (controller stuck in connecting/resetting/dead).
-// Best-effort: a failed list-subsys probe is logged and treated as not-degraded
-// so it can't mask the rest of the health check.
-func probeNvmeDegraded(nqn string) bool {
-	if nqn == "" {
-		return false
-	}
-	connected, live, err := util.NvmeSubsysStatus(nqn)
-	if err != nil {
-		klog.Warningf("NvmeSubsysStatus(%s) failed during staging health check: %v", nqn, err)
-		return false
-	}
-	return connected && !live
-}
-
-// probeReadOnly wraps isStagingReadOnly to swallow probe-side errors (the
-// /proc/mounts read itself failing shouldn't trigger recovery — only an
-// actually-ro mount should).
-func (ns *nodeServer) probeReadOnly(stagingTargetPath string) bool {
-	ro, err := ns.isStagingReadOnly(stagingTargetPath)
-	if err != nil {
-		klog.Warningf("read-only probe for %s failed: %v", stagingTargetPath, err)
-		return false
-	}
-	return ro
-}
-
-// probeIOError returns true only for corrupted-mount errors (EIO/ESTALE/etc.)
-// surfaced by an active directory read against the staging mount. Non-EIO
-// failures are logged and ignored — they likely indicate a probe bug rather
-// than a broken backend.
-func probeIOError(stagingTargetPath string) bool {
-	err := probeStagingIO(stagingTargetPath)
-	if err == nil {
-		return false
-	}
-	if mount.IsCorruptedMnt(err) {
-		klog.Warningf("staging I/O probe for %s returned corrupted-mount error: %v", stagingTargetPath, err)
-		return true
-	}
-	klog.Warningf("staging I/O probe for %s returned non-corrupt error, ignoring: %v", stagingTargetPath, err)
-	return false
-}
-
-// probeStagingIO actively reads the staging mount root so that backend-side
-// EIO surfaces here instead of being inherited by every pod that
-// bind-mounts through staging. The passive checks (os.Stat on the device,
-// IsMountPoint on the path, /proc/mounts ro flag) all return success when
-// NVMe stays `live` but the storage backend has stopped serving I/O — only
-// an actual directory read against the device exposes that state.
-//
-// Opening the directory and reading one entry is enough to force a real
-// data-block read; bare os.Stat usually returns cached inode info. On an
-// empty mount Readdirnames returns io.EOF, which is not a failure.
-func probeStagingIO(path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	if _, err := f.Readdirnames(1); err != nil && !errors.Is(err, io.EOF) {
-		return err
-	}
-	return nil
-}
-
-// isStagingReadOnly scans /proc/mounts (via mount-utils) for the staging path
-// and reports whether the kernel has it flagged `ro`. ext4 with the default
-// errors=remount-ro silently flips to ro on the first I/O error; subsequent
-// pods that bind-mount through staging inherit that ro state and the workload
-// fails with EROFS even after the underlying device recovers.
-func (ns *nodeServer) isStagingReadOnly(path string) (bool, error) {
-	mps, err := ns.mounter.List()
-	if err != nil {
-		return false, err
-	}
-	for i := range mps {
-		if mps[i].Path != path {
-			continue
-		}
-		for _, opt := range mps[i].Opts {
-			if opt == "ro" {
-				return true, nil
-			}
-		}
-		return false, nil
-	}
-	return false, nil
-}
-
-func (ns *nodeServer) recoverStaging(volumeID, stagingTargetPath, stagingParentPath string,
-	volumeContext map[string]string, h stagingHealthResult,
-) error {
-	// Unmount when the mount exists in any form OR when our deeper probes
-	// flagged it as degraded — even though the kernel still considers it a
-	// mount, the underlying device or filesystem is broken and bind-mounting
-	// pods onto it would inherit the failure.
-	forceUnmount := h.isMounted || mount.IsCorruptedMnt(h.mountErr) || h.nvmeDegraded || h.readOnly || h.ioError
-	if forceUnmount {
-		if uerr := ns.deleteMountPoint(stagingTargetPath); uerr != nil {
-			klog.Warningf("failed to clean staging mount during recovery for volume %s: %v", volumeID, uerr)
-		}
+	if len(others) > 0 {
+		klog.Infof("NodePublishVolume: volume %s still mounted by other pod(s) %v, returning Aborted for kubelet retry", volumeID, others)
+		return nil, status.Errorf(codes.Aborted,
+			"volume %s currently mounted by other pod(s) %v on this node; retry after their NodeUnpublishVolume completes",
+			volumeID, others)
 	}
 
 	initiator, err := util.NewMGXCsiInitiator(volumeContext, ns.conf)
 	if err != nil {
-		return err
+		klog.Errorf("failed to create mgx initiator, volumeID: %s err: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	// Disconnect first (idempotent) to clear any zombie NVMe controller before reconnecting.
+	// Tear down anything left over from a previous Publish attempt on this
+	// target (e.g. kubelet retried after our gRPC timed out). Each step is
+	// idempotent — on the common first-Publish case all three are no-ops.
+	if err = ns.deleteMountPoint(targetPath); err != nil {
+		klog.Errorf("failed to unmount target before re-publish, volumeID: %s err: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	if derr := initiator.Disconnect(); derr != nil {
-		klog.Warningf("disconnect during recovery for volume %s: %v", volumeID, derr)
+		klog.Warningf("NodePublishVolume: pre-connect disconnect failed (continuing): %v", derr)
 	}
 
-	klog.Infof("recoverStaging: reconnecting NVMe, volumeID: %s", volumeID)
-	newDevicePath, err := initiator.Connect(ns.conf.NrIoQueues, ns.conf.QueueSize)
+	klog.Infof("NodePublishVolume: connecting NVMe target, volumeID: %s", volumeID)
+	devicePath, err := initiator.Connect(ns.conf.NrIoQueues, ns.conf.QueueSize)
 	if err != nil {
-		return err
+		klog.Errorf("failed to connect initiator, volumeID: %s err: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
 	}
-	klog.Infof("recoverStaging: NVMe reconnected, volumeID: %s devicePath: %s", volumeID, newDevicePath)
-
-	mounted, err := ns.createMountPoint(stagingTargetPath)
-	if err != nil {
-		return err
-	}
-	if !mounted {
-		sfMounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
-		if err := sfMounter.FormatAndMount(newDevicePath, stagingTargetPath, "ext4", nil); err != nil {
-			return err
+	klog.Infof("NodePublishVolume: NVMe connected, volumeID: %s devicePath: %s", volumeID, devicePath)
+	defer func() {
+		if err != nil {
+			initiator.Disconnect() //nolint:errcheck // best-effort rollback after publish failure; surfaced error already logged
 		}
-		klog.Infof("recoverStaging: staging remounted, volumeID: %s -> %s", volumeID, stagingTargetPath)
+	}()
+
+	if _, err = ns.createMountPoint(targetPath); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	volumeContext["devicePath"] = newDevicePath
-	return util.StashVolumeContext(volumeContext, stagingParentPath)
+	mntFlags := vc.GetMount().GetMountFlags()
+	klog.Infof("NodePublishVolume: formatting+mounting, volumeID: %s device: %s -> %s flags: %v", volumeID, devicePath, targetPath, mntFlags)
+	sfMounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
+	if err = sfMounter.FormatAndMount(devicePath, targetPath, "ext4", mntFlags); err != nil {
+		klog.Errorf("failed to format and mount device, volumeID: %s err: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	klog.Infof("NodePublishVolume: mounted, volumeID: %s device: %s -> %s", volumeID, devicePath, targetPath)
+
+	// Stash devicePath + nqn under the per-pod parent so NodeUnpublishVolume
+	// (which receives only volume_id + target_path) and NodeExpandVolume
+	// (which receives volume_path) can recover the backing device without
+	// re-querying the backend.
+	volumeContext["devicePath"] = devicePath
+	if err = util.StashVolumeContext(volumeContext, targetParentPath); err != nil {
+		klog.Errorf("failed to stash volume context, volumeID: %s err: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	klog.Infof("NodePublishVolume: success, volumeID: %s targetPath: %s devicePath: %s", volumeID, targetPath, devicePath)
+	return &csi.NodePublishVolumeResponse{}, nil
 }
 
+// NodeUnpublishVolume tears down the per-pod mount and disconnects the NVMe
+// controller. When VolumeCleanEnabled is true it also asks the backend to
+// clean the volume and waits for READY so the next pod starts against a
+// known-good volume.
 func (ns *nodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
 
 	targetPath := req.GetTargetPath()
+	targetParentPath := filepath.Dir(targetPath)
 
-	// Snapshot bind-mount refs BEFORE unmounting target so we can tell whether
-	// another pod is already publishing the same volume (rolling update /
-	// recreate where the new pod's NodePublishVolume ran before our
-	// NodeUnpublishVolume). In that case we must not run volume_clean — it
-	// would tear down the live pod's I/O path.
-	stagingPath, otherPodMounts := ns.classifyMountRefs(targetPath)
+	klog.Infof("NodeUnpublishVolume: start, volumeID: %s targetPath: %s", volumeID, targetPath)
 
-	klog.Infof("NodeUnpublishVolume: unmounting bind, volumeID: %s targetPath: %s", volumeID, targetPath)
+	volumeContext, ctxErr := util.LookupVolumeContext(targetParentPath)
+	if ctxErr != nil {
+		klog.Warningf("no volume context for volume %s (idempotent unpublish?): %v", volumeID, ctxErr)
+	}
+
+	klog.Infof("NodeUnpublishVolume: unmounting, volumeID: %s targetPath: %s", volumeID, targetPath)
 	if err := ns.deleteMountPoint(targetPath); err != nil {
 		klog.Errorf("failed to unmount target path, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+	klog.Infof("NodeUnpublishVolume: unmounted, volumeID: %s targetPath: %s", volumeID, targetPath)
 
-	if otherPodMounts > 0 {
-		klog.Infof("NodeUnpublishVolume: %d other pod mount(s) still bound to staging, skipping volume_clean, volumeID: %s", otherPodMounts, volumeID)
-		klog.Infof("NodeUnpublishVolume: success, volumeID: %s targetPath: %s", volumeID, targetPath)
+	if volumeContext == nil {
+		klog.Infof("NodeUnpublishVolume: no stashed context, idempotent return, volumeID: %s", volumeID)
 		return &csi.NodeUnpublishVolumeResponse{}, nil
 	}
 
-	if stagingPath == "" {
-		klog.Infof("NodeUnpublishVolume: no staging mount detected, skipping volume_clean, volumeID: %s", volumeID)
-		klog.Infof("NodeUnpublishVolume: success, volumeID: %s targetPath: %s", volumeID, targetPath)
-		return &csi.NodeUnpublishVolumeResponse{}, nil
+	initiator, err := util.NewMGXCsiInitiator(volumeContext, ns.conf)
+	if err != nil {
+		klog.Errorf("failed to create mgx initiator, volumeID: %s err: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	klog.Infof("NodeUnpublishVolume: disconnecting NVMe target, volumeID: %s", volumeID)
+	if err = initiator.Disconnect(); err != nil {
+		klog.Errorf("failed to disconnect initiator, volumeID: %s err: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	klog.Infof("NodeUnpublishVolume: NVMe disconnected, volumeID: %s", volumeID)
+
+	if err = util.CleanUpVolumeContext(targetParentPath); err != nil {
+		klog.Errorf("failed to clean up volume context, volumeID: %s err: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if !ns.conf.VolumeCleanEnabled {
-		klog.Infof("NodeUnpublishVolume: volume_clean disabled, unmounting staging only, volumeID: %s stagingPath: %s", volumeID, stagingPath)
-		if err := ns.deleteMountPoint(stagingPath); err != nil {
-			klog.Errorf("failed to unmount staging path, volumeID: %s err: %v", volumeID, err)
+	if ns.conf.VolumeCleanEnabled {
+		if err = ns.cleanVolume(volumeID); err != nil {
+			klog.Errorf("volume_clean cycle failed, volumeID: %s err: %v", volumeID, err)
 			return nil, status.Error(codes.Internal, err.Error())
 		}
-	} else if err := ns.cleanVolumeAfterUnpublish(volumeID, stagingPath); err != nil {
-		klog.Errorf("volume_clean cycle failed, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
+	} else {
+		klog.Infof("NodeUnpublishVolume: volume_clean disabled, skipping, volumeID: %s", volumeID)
 	}
 
 	klog.Infof("NodeUnpublishVolume: success, volumeID: %s targetPath: %s", volumeID, targetPath)
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 
-// classifyMountRefs splits the bind-mount peers of targetPath into the staging
-// mount and any other pod target mounts. Other pod target mounts are an
-// overlap signal: another pod is already (or still) using the same volume on
-// this node, so we must skip the destructive clean cycle.
+// otherPodMounts lists kubelet pod target paths (other than targetPath)
+// that have the same volume's block device mounted. Used to detect a
+// rolling-update overlap where kubelet has issued Publish(new) before
+// Unpublish(old) — the new Publish must back off until the old pod's
+// mount is gone.
 //
-// Different volumes on the same node have different NVMe namespace devices,
-// so GetMountRefs (which keys on major:minor + root) only returns refs
-// belonging to this volume — multi-volume / multi-NVMe nodes are handled
-// implicitly without needing to filter by volumeID.
-func (ns *nodeServer) classifyMountRefs(targetPath string) (stagingPath string, otherPodMounts int) {
-	refs, err := ns.mounter.GetMountRefs(targetPath)
+// Identification is by block-device path: the NQN resolves to a single
+// /dev/disk/by-id symlink, so any /proc/mounts entry whose device matches
+// is for this volume. Restricting hits to the kubelet pods dir avoids
+// false positives from non-pod mounts of the same device.
+func (ns *nodeServer) otherPodMounts(targetPath, volName string) ([]string, error) {
+	if volName == "" {
+		return nil, nil
+	}
+	matches, err := filepath.Glob(fmt.Sprintf("/dev/disk/by-id/*%s*", volName))
 	if err != nil {
-		klog.Warningf("GetMountRefs(%s) failed: %v", targetPath, err)
-		return "", 0
+		return nil, err
+	}
+	if len(matches) == 0 {
+		// No /dev symlink means no NVMe controller is connected for this
+		// volume, so there can't be any pod mounts of it.
+		return nil, nil
+	}
+	devicePath, err := filepath.EvalSymlinks(matches[0])
+	if err != nil {
+		return nil, err
+	}
+	mps, err := ns.mounter.List()
+	if err != nil {
+		return nil, err
 	}
 	podsDir := kubeletPodsDir(targetPath)
-	for _, ref := range refs {
-		if ref == targetPath {
+	var others []string
+	for i := range mps {
+		if mps[i].Device != devicePath {
 			continue
 		}
-		if podsDir != "" && strings.HasPrefix(ref, podsDir) {
-			otherPodMounts++
-			klog.V(5).Infof("classifyMountRefs: other pod mount %s", ref)
+		if mps[i].Path == targetPath {
 			continue
 		}
-		// First non-pod ref is the staging mount. Subsequent ones shouldn't
-		// exist in normal CSI flow; keep the first and log the rest.
-		if stagingPath == "" {
-			stagingPath = ref
-		} else {
-			klog.Warningf("classifyMountRefs: unexpected extra non-pod ref %s (already have staging %s)", ref, stagingPath)
+		if podsDir != "" && strings.HasPrefix(mps[i].Path, podsDir) {
+			others = append(others, mps[i].Path)
 		}
 	}
-	return stagingPath, otherPodMounts
+	return others, nil
 }
 
 // kubeletPodsDir returns the kubelet per-pod root (e.g. /var/lib/kubelet/pods/)
 // derived from the CSI targetPath, which kubelet always shapes as
 // <root>/pods/<podUID>/volumes/kubernetes.io~csi/<pv>/mount. Deriving the
-// prefix instead of hard-coding it lets the driver work on clusters that run
-// kubelet with a custom --root-dir. Returns "" if targetPath doesn't contain
-// the expected "/pods/" segment.
+// prefix instead of hard-coding it lets the driver work on clusters that
+// run kubelet with a custom --root-dir. Returns "" if targetPath doesn't
+// contain the expected "/pods/" segment.
 func kubeletPodsDir(targetPath string) string {
 	const segment = "/pods/"
 	idx := strings.Index(targetPath, segment)
@@ -523,15 +262,10 @@ func kubeletPodsDir(targetPath string) string {
 	return targetPath[:idx+len(segment)]
 }
 
-// cleanVolumeAfterUnpublish unmounts the global staging mount, asks the
-// storage backend to clean the volume, then polls until the volume reports
-// READY. The next NodePublishVolume rebuilds staging via ensureStagingHealthy.
-func (ns *nodeServer) cleanVolumeAfterUnpublish(volumeID, stagingPath string) error {
-	klog.Infof("NodeUnpublishVolume: unmounting staging, volumeID: %s stagingPath: %s", volumeID, stagingPath)
-	if err := ns.deleteMountPoint(stagingPath); err != nil {
-		return fmt.Errorf("unmount staging %s: %w", stagingPath, err)
-	}
-
+// cleanVolume asks the storage backend to clean the volume and waits for
+// it to report READY before returning. Called only when VolumeCleanEnabled
+// is set on the node config.
+func (ns *nodeServer) cleanVolume(volumeID string) error {
 	mgxClient, err := util.NewMGXClient()
 	if err != nil {
 		return fmt.Errorf("init mgx client: %w", err)
@@ -545,8 +279,8 @@ func (ns *nodeServer) cleanVolumeAfterUnpublish(volumeID, stagingPath string) er
 	return ns.waitVolumeReady(volumeID, mgxClient)
 }
 
-// waitVolumeReady polls volume_get on cfg-tunable intervals until the volume
-// reports READY or the total timeout elapses.
+// waitVolumeReady polls volume_get on cfg-tunable intervals until the
+// volume reports READY or the total timeout elapses.
 func (ns *nodeServer) waitVolumeReady(volumeID string, mgxClient *util.NodeNVMf) error {
 	interval := time.Duration(ns.conf.VolumeCleanPollIntervalSec) * time.Second
 	timeout := time.Duration(ns.conf.VolumeCleanReadyTimeoutSec) * time.Second
@@ -581,13 +315,6 @@ func (*nodeServer) NodeGetCapabilities(_ context.Context, _ *csi.NodeGetCapabili
 			{
 				Type: &csi.NodeServiceCapability_Rpc{
 					Rpc: &csi.NodeServiceCapability_RPC{
-						Type: csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
-					},
-				},
-			},
-			{
-				Type: &csi.NodeServiceCapability_Rpc{
-					Rpc: &csi.NodeServiceCapability_RPC{
 						Type: csi.NodeServiceCapability_RPC_EXPAND_VOLUME,
 					},
 				},
@@ -606,9 +333,9 @@ func (*nodeServer) NodeGetCapabilities(_ context.Context, _ *csi.NodeGetCapabili
 func (*nodeServer) NodeExpandVolume(_ context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	volumeMountPath := req.GetVolumePath()
-	stagingParentPath := filepath.Dir(req.GetStagingTargetPath())
+	targetParentPath := filepath.Dir(volumeMountPath)
 
-	volumeContext, err := util.LookupVolumeContext(stagingParentPath)
+	volumeContext, err := util.LookupVolumeContext(targetParentPath)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to retrieve volume context for volume %s: %v", volumeID, err)
 	}
