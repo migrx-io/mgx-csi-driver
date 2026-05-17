@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -139,10 +138,13 @@ func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 	return &csi.NodePublishVolumeResponse{}, nil
 }
 
-// NodeUnpublishVolume tears down the per-pod mount and disconnects the NVMe
-// controller. When VolumeCleanEnabled is true it also asks the backend to
-// clean the volume and waits for READY so the next pod starts against a
-// known-good volume.
+// NodeUnpublishVolume tears down the per-pod mount and, when this is the
+// last pod on this node using the volume, disconnects the NVMe controller
+// and runs volume_clean on the backend. The node is the only place clean
+// runs — ControllerUnpublishVolume is a no-op — so every pod restart
+// (same-node or cross-node) goes through a clean before the next attach.
+// The cross-node race against in-flight clean is closed by
+// ControllerPublishVolume returning Aborted while the volume isn't READY.
 func (ns *nodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	unlock := ns.volumeLocks.Lock(volumeID)
@@ -205,17 +207,31 @@ func (ns *nodeServer) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpubl
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if ns.conf.VolumeCleanEnabled {
-		if err = ns.cleanVolume(volumeID); err != nil {
-			klog.Errorf("volume_clean cycle failed, volumeID: %s err: %v", volumeID, err)
-			return nil, status.Error(codes.Internal, err.Error())
-		}
-	} else {
-		klog.Infof("NodeUnpublishVolume: volume_clean disabled, skipping, volumeID: %s", volumeID)
+	if err := ns.cleanVolume(volumeID); err != nil {
+		klog.Errorf("volume_clean cycle failed, volumeID: %s err: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	klog.Infof("NodeUnpublishVolume: success, volumeID: %s targetPath: %s", volumeID, targetPath)
 	return &csi.NodeUnpublishVolumeResponse{}, nil
+}
+
+// cleanVolume asks the storage backend to clean the volume and waits for
+// READY. No-op when VolumeCleanEnabled is false on the node config.
+func (ns *nodeServer) cleanVolume(volumeID string) error {
+	if !ns.conf.VolumeCleanEnabled {
+		klog.Infof("NodeUnpublishVolume: volume_clean disabled, skipping, volumeID: %s", volumeID)
+		return nil
+	}
+	mgxClient, err := util.NewMGXClient()
+	if err != nil {
+		return fmt.Errorf("init mgx client: %w", err)
+	}
+	klog.Infof("NodeUnpublishVolume: calling volume_clean, volumeID: %s", volumeID)
+	if err := mgxClient.CleanVolume(volumeID); err != nil {
+		return fmt.Errorf("volume_clean: %w", err)
+	}
+	return waitVolumeReady(volumeID, mgxClient, ns.conf)
 }
 
 // otherPodMounts lists kubelet pod target paths (other than targetPath)
@@ -278,53 +294,6 @@ func kubeletPodsDir(targetPath string) string {
 		return ""
 	}
 	return targetPath[:idx+len(segment)]
-}
-
-// cleanVolume asks the storage backend to clean the volume and waits for
-// it to report READY before returning. Called only when VolumeCleanEnabled
-// is set on the node config.
-func (ns *nodeServer) cleanVolume(volumeID string) error {
-	mgxClient, err := util.NewMGXClient()
-	if err != nil {
-		return fmt.Errorf("init mgx client: %w", err)
-	}
-
-	klog.Infof("NodeUnpublishVolume: calling volume_clean, volumeID: %s", volumeID)
-	if err := mgxClient.CleanVolume(volumeID); err != nil {
-		return fmt.Errorf("volume_clean: %w", err)
-	}
-
-	return ns.waitVolumeReady(volumeID, mgxClient)
-}
-
-// waitVolumeReady polls volume_get on cfg-tunable intervals until the
-// volume reports READY or the total timeout elapses.
-func (ns *nodeServer) waitVolumeReady(volumeID string, mgxClient *util.NodeNVMf) error {
-	interval := time.Duration(ns.conf.VolumeCleanPollIntervalSec) * time.Second
-	timeout := time.Duration(ns.conf.VolumeCleanReadyTimeoutSec) * time.Second
-	if interval <= 0 {
-		interval = 2 * time.Second
-	}
-	if timeout <= 0 {
-		timeout = 60 * time.Second
-	}
-
-	deadline := time.Now().Add(timeout)
-	for {
-		vol, err := mgxClient.GetVolume(volumeID)
-		if err != nil {
-			klog.Warningf("waitVolumeReady: GetVolume failed, volumeID: %s err: %v", volumeID, err)
-		} else if vol.Status == VolumeStatusReady {
-			klog.Infof("waitVolumeReady: volume READY, volumeID: %s", volumeID)
-			return nil
-		} else {
-			klog.V(5).Infof("waitVolumeReady: volume not READY yet, volumeID: %s status: %s", volumeID, vol.Status)
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("volume %s did not reach READY within %s", volumeID, timeout)
-		}
-		time.Sleep(interval)
-	}
 }
 
 func (*nodeServer) NodeGetCapabilities(_ context.Context, _ *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {

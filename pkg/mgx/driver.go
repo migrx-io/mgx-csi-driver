@@ -20,6 +20,13 @@ func Run(conf *util.Config) {
 
 		controllerCaps = []csi.ControllerServiceCapability_RPC_Type{
 			csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
+			// PUBLISH_UNPUBLISH_VOLUME makes external-attacher create a
+			// VolumeAttachment per (PV, node) pair, which serializes
+			// ControllerPublishVolume on the new node behind
+			// ControllerUnpublishVolume on the old node. That's where the
+			// volume_clean READY-wait lives, so the cross-node Publish-vs-clean
+			// race is closed at the attacher layer.
+			csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME,
 			csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
 			csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS,
 			csi.ControllerServiceCapability_RPC_EXPAND_VOLUME,
@@ -50,7 +57,7 @@ func Run(conf *util.Config) {
 	}
 
 	if conf.IsControllerServer {
-		cs = newControllerServer(cd)
+		cs = newControllerServer(cd, conf)
 
 		// Start volume reconciler
 		rec, err := NewVolumeReconciler(cs, conf.Timeout, time.Duration(conf.IdleVolumeMin)*time.Minute)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -25,6 +26,7 @@ const (
 type controllerServer struct {
 	*csicommon.DefaultControllerServer
 	volumeLocks *util.VolumeLocks
+	conf        *util.Config
 }
 
 type mgxVolume struct {
@@ -258,6 +260,120 @@ func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 	}
 
 	return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s is still deleting", volumeID))
+}
+
+// ControllerPublishVolume gates the cross-node attach. external-attacher
+// calls this before the new node's NodePublishVolume; we look up the volume
+// on the backend and return Aborted if it isn't READY yet, which happens
+// when ControllerUnpublishVolume on the previous node is still running its
+// volume_clean cycle. Aborted causes the attacher to retry with backoff
+// until the backend reports READY. The backend has no per-node ACL — the
+// volume is exposed at CreateVolume time — so there's no real "attach" RPC
+// to issue here; an empty PublishContext is returned because everything the
+// node plugin needs already lives in volume_context from CreateVolume.
+func (cs *controllerServer) ControllerPublishVolume(_ context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+	volumeID := req.GetVolumeId()
+	nodeID := req.GetNodeId()
+	if volumeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume_id missing")
+	}
+	if nodeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id missing")
+	}
+
+	vc := req.GetVolumeCapability()
+	if vc == nil {
+		return nil, status.Error(codes.InvalidArgument, "volume_capability missing")
+	}
+	mode := vc.GetAccessMode().GetMode()
+	if mode != csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER &&
+		mode != csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER {
+		return nil, status.Error(codes.InvalidArgument,
+			"Only ReadWriteOnce (RWO) and ReadWriteOncePod (RWOP) are supported by this driver")
+	}
+
+	unlock := cs.volumeLocks.Lock(volumeID)
+	defer unlock()
+
+	klog.Infof("ControllerPublishVolume: start, volumeID: %s nodeID: %s", volumeID, nodeID)
+
+	mgxClient, err := util.NewMGXClient()
+	if err != nil {
+		klog.Errorf("ControllerPublishVolume: init mgx client, volumeID: %s err: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	volume, err := mgxClient.GetVolume(volumeID)
+	if err != nil {
+		if errors.Is(err, util.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "volume %s not found", volumeID)
+		}
+		klog.Errorf("ControllerPublishVolume: get volume, volumeID: %s err: %v", volumeID, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	if volume.Status != VolumeStatusReady {
+		klog.Infof("ControllerPublishVolume: volume not READY, returning Aborted for attacher retry; volumeID: %s status: %s nodeID: %s", volumeID, volume.Status, nodeID)
+		return nil, status.Errorf(codes.Aborted,
+			"volume %s not READY (current: %s); retry after backend completes in-flight cycle",
+			volumeID, volume.Status)
+	}
+
+	klog.Infof("ControllerPublishVolume: success, volumeID: %s nodeID: %s", volumeID, nodeID)
+	return &csi.ControllerPublishVolumeResponse{}, nil
+}
+
+// ControllerUnpublishVolume is the matching half of the
+// PUBLISH_UNPUBLISH_VOLUME capability — required by the CSI spec but
+// intentionally lightweight here. The real volume_clean runs in
+// NodeUnpublishVolume on the node that owned the mount; this method
+// just signals external-attacher that the VolumeAttachment can be
+// reconciled away. The cross-node race is closed by
+// ControllerPublishVolume's READY check, not by anything done here.
+func (cs *controllerServer) ControllerUnpublishVolume(_ context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+	volumeID := req.GetVolumeId()
+	nodeID := req.GetNodeId()
+	if volumeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume_id missing")
+	}
+
+	unlock := cs.volumeLocks.Lock(volumeID)
+	defer unlock()
+
+	klog.Infof("ControllerUnpublishVolume: success (no-op), volumeID: %s nodeID: %s", volumeID, nodeID)
+	return &csi.ControllerUnpublishVolumeResponse{}, nil
+}
+
+// waitVolumeReady polls volume_get on cfg-tunable intervals until the
+// volume reports READY or the total timeout elapses. Shared between
+// ControllerUnpublishVolume (post volume_clean) and any other site that
+// needs a backend readiness barrier.
+func waitVolumeReady(volumeID string, mgxClient *util.NodeNVMf, conf *util.Config) error {
+	interval := time.Duration(conf.VolumeCleanPollIntervalSec) * time.Second
+	timeout := time.Duration(conf.VolumeCleanReadyTimeoutSec) * time.Second
+	if interval <= 0 {
+		interval = 2 * time.Second
+	}
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		vol, err := mgxClient.GetVolume(volumeID)
+		if err != nil {
+			klog.Warningf("waitVolumeReady: GetVolume failed, volumeID: %s err: %v", volumeID, err)
+		} else if vol.Status == VolumeStatusReady {
+			klog.Infof("waitVolumeReady: volume READY, volumeID: %s", volumeID)
+			return nil
+		} else {
+			klog.V(5).Infof("waitVolumeReady: volume not READY yet, volumeID: %s status: %s", volumeID, vol.Status)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("volume %s did not reach READY within %s", volumeID, timeout)
+		}
+		time.Sleep(interval)
+	}
 }
 
 func (cs *controllerServer) ValidateVolumeCapabilities(_ context.Context, req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {
@@ -694,10 +810,11 @@ func (cs *controllerServer) ControllerGetVolume(_ context.Context, req *csi.Cont
 	}, nil
 }
 
-func newControllerServer(d *csicommon.CSIDriver) *controllerServer {
+func newControllerServer(d *csicommon.CSIDriver, conf *util.Config) *controllerServer {
 	server := controllerServer{
 		DefaultControllerServer: csicommon.NewDefaultControllerServer(d),
 		volumeLocks:             util.NewVolumeLocks(),
+		conf:                    conf,
 	}
 	return &server
 }
