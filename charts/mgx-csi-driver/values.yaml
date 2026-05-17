@@ -13,6 +13,10 @@ image:
     repository: registry.k8s.io/sig-storage/csi-resizer
     tag: v2.0.0
     pullPolicy: IfNotPresent
+  csiAttacher:
+    repository: registry.k8s.io/sig-storage/csi-attacher
+    tag: v4.7.0
+    pullPolicy: IfNotPresent
   nodeDriverRegistrar:
     repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
     tag: v2.15.0
