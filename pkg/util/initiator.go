@@ -29,11 +29,13 @@ type MGXCsiInitiator interface {
 
 // initiatorNVMf is an implementation of NVMf tcp initiator
 type initiatorNVMf struct {
-	name           string
-	nqn            string
-	reconnectDelay int
-	ctrlLossTmo    int
-	fastIOFailTmo  int
+	name              string
+	nqn               string
+	reconnectDelay    int
+	ctrlLossTmo       int
+	fastIOFailTmo     int
+	keepAliveTmo      int
+	disconnectTimeout int
 }
 
 func NewMGXClient() (*NodeNVMf, error) {
@@ -66,11 +68,13 @@ func NewMGXCsiInitiator(volumeContext map[string]string, conf *Config) (MGXCsiIn
 	klog.Infof("mgx nqn :%s", volumeContext["nqn"])
 
 	return &initiatorNVMf{
-		name:           volumeContext["name"],
-		nqn:            volumeContext["nqn"],
-		reconnectDelay: conf.ReconnectDelay,
-		ctrlLossTmo:    conf.CtrlLossTmo,
-		fastIOFailTmo:  conf.FastIOFailTmo,
+		name:              volumeContext["name"],
+		nqn:               volumeContext["nqn"],
+		reconnectDelay:    conf.ReconnectDelay,
+		ctrlLossTmo:       conf.CtrlLossTmo,
+		fastIOFailTmo:     conf.FastIOFailTmo,
+		keepAliveTmo:      conf.KeepAliveTmo,
+		disconnectTimeout: conf.NvmeDisconnectTimeoutSec,
 	}, nil
 }
 
@@ -122,6 +126,7 @@ func (nvmf *initiatorNVMf) Connect(nrIoQueues, queueSize int) (string, error) {
 			"--ctrl-loss-tmo=" + strconv.Itoa(nvmf.ctrlLossTmo),
 			"--reconnect-delay=" + strconv.Itoa(nvmf.reconnectDelay),
 			"--fast_io_fail_tmo=" + strconv.Itoa(nvmf.fastIOFailTmo),
+			"--keep-alive-tmo=" + strconv.Itoa(nvmf.keepAliveTmo),
 		}
 
 		err = execWithTimeoutRetry(cmdLine, 30, 1)
@@ -149,8 +154,16 @@ func (nvmf *initiatorNVMf) Disconnect() error {
 		klog.Errorf("command %v failed: %s", cmdLine, err)
 	}
 
+	// Authoritative signal first: wait for the kernel to drop the subsystem
+	// entry. While that entry exists the host still has the namespace open,
+	// and calling volume_clean against the backend would race the teardown.
+	// The by-id symlink wait that follows is the udev-side confirmation.
+	if err := waitForSubsysGone(nvmf.nqn, nvmf.disconnectTimeout); err != nil {
+		return err
+	}
+
 	deviceGlob := fmt.Sprintf("/dev/disk/by-id/*%s*", nvmf.name)
-	return waitForDeviceGone(deviceGlob)
+	return waitForDeviceGone(deviceGlob, nvmf.disconnectTimeout)
 }
 
 // when timeout is set as 0, try to find the device file immediately
@@ -170,9 +183,26 @@ func waitForDeviceReady(deviceGlob string, seconds int) (string, error) {
 	return "", fmt.Errorf("timed out waiting device ready: %s", deviceGlob)
 }
 
+// waitForSubsysGone polls `nvme list-subsys` until the NQN's subsystem
+// entry is no longer present, or fails after seconds. Transient probe
+// failures are logged and retried — only a persistently-present subsystem
+// returns an error, which gates volume_clean in NodeUnpublishVolume.
+func waitForSubsysGone(nqn string, seconds int) error {
+	for i := 0; i <= seconds; i++ {
+		connected, _, err := NvmeSubsysStatus(nqn)
+		if err != nil {
+			klog.Warningf("nvme list-subsys probe failed (will retry): %v", err)
+		} else if !connected {
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+	return fmt.Errorf("timed out waiting for NVMe subsystem to disconnect: %s", nqn)
+}
+
 // wait for device file gone or timeout
-func waitForDeviceGone(deviceGlob string) error {
-	for range 21 {
+func waitForDeviceGone(deviceGlob string, seconds int) error {
+	for i := 0; i <= seconds; i++ {
 		matches, err := filepath.Glob(deviceGlob)
 		if err != nil {
 			return err

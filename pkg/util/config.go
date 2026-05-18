@@ -18,6 +18,17 @@ type Config struct {
 	ReconnectDelay int
 	CtrlLossTmo    int
 	FastIOFailTmo  int
+	KeepAliveTmo   int
+
+	// How long Disconnect() waits for the kernel to drop the NVMe subsystem
+	// entry and for udev to remove the /dev/disk/by-id symlink before
+	// returning an error and skipping volume_clean.
+	NvmeDisconnectTimeoutSec int
+
+	// Per-command timeout (seconds) applied to every shell-out that
+	// SafeFormatAndMount makes (fsck, mkfs, mount). Guards against a stuck
+	// NVMe-oF device wedging NodePublishVolume forever.
+	MkfsFsckTimeoutSec int
 
 	// volume_clean polling: how often to GetVolume while waiting for READY,
 	// and the total wall-clock budget after which we give up and fail unpublish.

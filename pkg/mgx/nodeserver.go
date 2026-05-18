@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -117,7 +118,10 @@ func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 
 	mntFlags := vc.GetMount().GetMountFlags()
 	klog.Infof("NodePublishVolume: formatting+mounting, volumeID: %s device: %s -> %s flags: %v", volumeID, devicePath, targetPath, mntFlags)
-	sfMounter := mount.SafeFormatAndMount{Interface: ns.mounter, Exec: exec.New()}
+	sfMounter := mount.SafeFormatAndMount{
+		Interface: ns.mounter,
+		Exec:      util.NewTimeoutExec(exec.New(), time.Duration(ns.conf.MkfsFsckTimeoutSec)*time.Second),
+	}
 	if err = sfMounter.FormatAndMount(devicePath, targetPath, "ext4", mntFlags); err != nil {
 		klog.Errorf("failed to format and mount device, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
