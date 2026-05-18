@@ -87,9 +87,21 @@ node:
   # ctrlLossTmo: how long the host keeps retrying reconnect before removing
   #   the controller permanently. Should be >= fastIoFailTmo.
   # reconnectDelay: pause between reconnect attempts.
+  # keepAliveTmo: keep-alive timeout; the controller is considered lost if
+  #   no keep-alive is received within this window.
   fastIoFailTmo: 0
   ctrlLossTmo: 10
   reconnectDelay: 2
+  keepAliveTmo: 5
+  # nvmeTimeout: shared deadline (seconds) for `nvme connect` / `nvme
+  #   disconnect` shell-outs and for the post-disconnect waits for the
+  #   kernel subsystem entry and /dev/disk/by-id symlink to clear. If any
+  #   step exceeds this, the op fails and volume_clean is skipped.
+  nvmeTimeout: 30
+  # mkfsFsckTimeout: per-command deadline (seconds) applied to every
+  # shell-out that SafeFormatAndMount makes (fsck, mkfs, mount). Guards
+  # against a stuck NVMe-oF device wedging NodePublishVolume forever.
+  mkfsFsckTimeout: 120
   # volume_clean polling (seconds). After unmounting on pod restart the node
   # calls storage.volume_clean and waits for volume_get to report READY before
   # returning. volumeCleanPollInterval is the gap between GetVolume probes;

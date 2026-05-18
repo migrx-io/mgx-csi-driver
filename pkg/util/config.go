@@ -20,15 +20,12 @@ type Config struct {
 	FastIOFailTmo  int
 	KeepAliveTmo   int
 
-	// How long Disconnect() waits for the kernel to drop the NVMe subsystem
-	// entry and for udev to remove the /dev/disk/by-id symlink before
-	// returning an error and skipping volume_clean.
-	NvmeDisconnectTimeoutSec int
-
-	// Per-invocation deadline for `nvme connect` / `nvme disconnect` shell
-	// commands. The process is killed if it has not returned within this
-	// window.
-	NvmeCmdTimeoutSec int
+	// Single deadline (seconds) covering every NVMe teardown/setup step:
+	// the `nvme connect` / `nvme disconnect` shell-out itself, plus the
+	// post-disconnect waits for the kernel subsystem entry and the
+	// /dev/disk/by-id symlink to disappear. If any step exceeds this,
+	// the operation fails and volume_clean is skipped.
+	NvmeTimeoutSec int
 
 	// Per-command timeout (seconds) applied to every shell-out that
 	// SafeFormatAndMount makes (fsck, mkfs, mount). Guards against a stuck

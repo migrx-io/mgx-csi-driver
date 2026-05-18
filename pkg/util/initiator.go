@@ -29,14 +29,13 @@ type MGXCsiInitiator interface {
 
 // initiatorNVMf is an implementation of NVMf tcp initiator
 type initiatorNVMf struct {
-	name              string
-	nqn               string
-	reconnectDelay    int
-	ctrlLossTmo       int
-	fastIOFailTmo     int
-	keepAliveTmo      int
-	disconnectTimeout int
-	cmdTimeout        int
+	name           string
+	nqn            string
+	reconnectDelay int
+	ctrlLossTmo    int
+	fastIOFailTmo  int
+	keepAliveTmo   int
+	timeout        int
 }
 
 func NewMGXClient() (*NodeNVMf, error) {
@@ -69,14 +68,13 @@ func NewMGXCsiInitiator(volumeContext map[string]string, conf *Config) (MGXCsiIn
 	klog.Infof("mgx nqn :%s", volumeContext["nqn"])
 
 	return &initiatorNVMf{
-		name:              volumeContext["name"],
-		nqn:               volumeContext["nqn"],
-		reconnectDelay:    conf.ReconnectDelay,
-		ctrlLossTmo:       conf.CtrlLossTmo,
-		fastIOFailTmo:     conf.FastIOFailTmo,
-		keepAliveTmo:      conf.KeepAliveTmo,
-		disconnectTimeout: conf.NvmeDisconnectTimeoutSec,
-		cmdTimeout:        conf.NvmeCmdTimeoutSec,
+		name:           volumeContext["name"],
+		nqn:            volumeContext["nqn"],
+		reconnectDelay: conf.ReconnectDelay,
+		ctrlLossTmo:    conf.CtrlLossTmo,
+		fastIOFailTmo:  conf.FastIOFailTmo,
+		keepAliveTmo:   conf.KeepAliveTmo,
+		timeout:        conf.NvmeTimeoutSec,
 	}, nil
 }
 
@@ -131,7 +129,7 @@ func (nvmf *initiatorNVMf) Connect(nrIoQueues, queueSize int) (string, error) {
 			"--keep-alive-tmo=" + strconv.Itoa(nvmf.keepAliveTmo),
 		}
 
-		err = execWithTimeoutRetry(cmdLine, nvmf.cmdTimeout, 1)
+		err = execWithTimeoutRetry(cmdLine, nvmf.timeout, 1)
 		if err != nil {
 			// go on checking device status in case caused by duplicated request
 			klog.Errorf("command %v failed: %s", cmdLine, err)
@@ -150,7 +148,7 @@ func (nvmf *initiatorNVMf) Connect(nrIoQueues, queueSize int) (string, error) {
 func (nvmf *initiatorNVMf) Disconnect() error {
 	// nvme disconnect -n "nqn"
 	cmdLine := []string{"nvme", "disconnect", "-n", nvmf.nqn}
-	err := execWithTimeout(cmdLine, nvmf.cmdTimeout)
+	err := execWithTimeout(cmdLine, nvmf.timeout)
 	if err != nil {
 		// go on checking device status in case caused by duplicate request
 		klog.Errorf("command %v failed: %s", cmdLine, err)
@@ -160,12 +158,12 @@ func (nvmf *initiatorNVMf) Disconnect() error {
 	// entry. While that entry exists the host still has the namespace open,
 	// and calling volume_clean against the backend would race the teardown.
 	// The by-id symlink wait that follows is the udev-side confirmation.
-	if err := waitForSubsysGone(nvmf.nqn, nvmf.disconnectTimeout); err != nil {
+	if err := waitForSubsysGone(nvmf.nqn, nvmf.timeout); err != nil {
 		return err
 	}
 
 	deviceGlob := fmt.Sprintf("/dev/disk/by-id/*%s*", nvmf.name)
-	return waitForDeviceGone(deviceGlob, nvmf.disconnectTimeout)
+	return waitForDeviceGone(deviceGlob, nvmf.timeout)
 }
 
 // when timeout is set as 0, try to find the device file immediately
