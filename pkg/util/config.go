@@ -25,6 +25,11 @@ type Config struct {
 	// returning an error and skipping volume_clean.
 	NvmeDisconnectTimeoutSec int
 
+	// Per-invocation deadline for `nvme connect` / `nvme disconnect` shell
+	// commands. The process is killed if it has not returned within this
+	// window.
+	NvmeCmdTimeoutSec int
+
 	// Per-command timeout (seconds) applied to every shell-out that
 	// SafeFormatAndMount makes (fsck, mkfs, mount). Guards against a stuck
 	// NVMe-oF device wedging NodePublishVolume forever.

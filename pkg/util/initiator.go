@@ -36,6 +36,7 @@ type initiatorNVMf struct {
 	fastIOFailTmo     int
 	keepAliveTmo      int
 	disconnectTimeout int
+	cmdTimeout        int
 }
 
 func NewMGXClient() (*NodeNVMf, error) {
@@ -75,6 +76,7 @@ func NewMGXCsiInitiator(volumeContext map[string]string, conf *Config) (MGXCsiIn
 		fastIOFailTmo:     conf.FastIOFailTmo,
 		keepAliveTmo:      conf.KeepAliveTmo,
 		disconnectTimeout: conf.NvmeDisconnectTimeoutSec,
+		cmdTimeout:        conf.NvmeCmdTimeoutSec,
 	}, nil
 }
 
@@ -129,7 +131,7 @@ func (nvmf *initiatorNVMf) Connect(nrIoQueues, queueSize int) (string, error) {
 			"--keep-alive-tmo=" + strconv.Itoa(nvmf.keepAliveTmo),
 		}
 
-		err = execWithTimeoutRetry(cmdLine, 30, 1)
+		err = execWithTimeoutRetry(cmdLine, nvmf.cmdTimeout, 1)
 		if err != nil {
 			// go on checking device status in case caused by duplicated request
 			klog.Errorf("command %v failed: %s", cmdLine, err)
@@ -148,7 +150,7 @@ func (nvmf *initiatorNVMf) Connect(nrIoQueues, queueSize int) (string, error) {
 func (nvmf *initiatorNVMf) Disconnect() error {
 	// nvme disconnect -n "nqn"
 	cmdLine := []string{"nvme", "disconnect", "-n", nvmf.nqn}
-	err := execWithTimeout(cmdLine, 40)
+	err := execWithTimeout(cmdLine, nvmf.cmdTimeout)
 	if err != nil {
 		// go on checking device status in case caused by duplicate request
 		klog.Errorf("command %v failed: %s", cmdLine, err)
