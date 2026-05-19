@@ -109,7 +109,7 @@ node:
   # fails and kubelet retries.
   # volumeCleanEnabled: set to false to skip the storage.volume_clean RPC
   # entirely on NodeUnpublishVolume — the node only unmounts in that case.
-  volumeCleanEnabled: true
+  volumeCleanEnabled: false
   volumeCleanPollInterval: 2
   volumeCleanReadyTimeout: 60
 
