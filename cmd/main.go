@@ -37,7 +37,7 @@ func setupFlags() {
 	flag.IntVar(&conf.MkfsFsckTimeoutSec, "mkfs-fsck-timeout", 120, "Per-command timeout (seconds) for SafeFormatAndMount shell-outs (fsck/mkfs/mount); processes that exceed this are killed to prevent NodePublishVolume from hanging on a stuck NVMe-oF device")
 	flag.IntVar(&conf.VolumeCleanPollIntervalSec, "volume-clean-poll-interval", 2, "Interval (seconds) between volume_get polls while waiting for READY after volume_clean")
 	flag.IntVar(&conf.VolumeCleanReadyTimeoutSec, "volume-clean-ready-timeout", 60, "Total budget (seconds) to wait for volume_get to report READY after volume_clean")
-	flag.BoolVar(&conf.VolumeCleanEnabled, "volume-clean-enabled", true, "When false, NodeUnpublishVolume skips the storage.volume_clean RPC and only unmounts")
+	flag.BoolVar(&conf.VolumeCleanEnabled, "volume-clean-enabled", false, "When true, NodeUnpublishVolume calls the storage.volume_clean RPC after unmount and waits for READY before returning")
 
 	klog.InitFlags(nil)
 	if err := flag.Set("logtostderr", "true"); err != nil {

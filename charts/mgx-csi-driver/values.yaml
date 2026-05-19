@@ -107,8 +107,9 @@ node:
   # returning. volumeCleanPollInterval is the gap between GetVolume probes;
   # volumeCleanReadyTimeout is the total wall-clock budget before unpublish
   # fails and kubelet retries.
-  # volumeCleanEnabled: set to false to skip the storage.volume_clean RPC
-  # entirely on NodeUnpublishVolume — the node only unmounts in that case.
+  # volumeCleanEnabled: set to true to call the storage.volume_clean RPC on
+  # NodeUnpublishVolume and wait for READY. Disabled by default — the node
+  # only unmounts in that case.
   volumeCleanEnabled: false
   volumeCleanPollInterval: 2
   volumeCleanReadyTimeout: 60
