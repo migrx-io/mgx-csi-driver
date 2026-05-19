@@ -311,9 +311,12 @@ func (client *RPCClient) startVolume(lvolID string) error {
 	return err
 }
 
-func (client *RPCClient) cleanVolume(lvolID string) error {
+func (client *RPCClient) cleanVolume(lvolID string, fstrimTimeoutSec int) error {
 	params := map[string]any{
 		"name": lvolID,
+	}
+	if fstrimTimeoutSec > 0 {
+		params["timeout"] = fstrimTimeoutSec
 	}
 
 	klog.V(5).Infof("cleanVolume: %v", &params)

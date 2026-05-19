@@ -107,8 +107,8 @@ func (node *NodeNVMf) StartVolume(lvolID string) error {
 	return nil
 }
 
-func (node *NodeNVMf) CleanVolume(lvolID string) error {
-	err := node.Client.cleanVolume(lvolID)
+func (node *NodeNVMf) CleanVolume(lvolID string, fstrimTimeoutSec int) error {
+	err := node.Client.cleanVolume(lvolID, fstrimTimeoutSec)
 	if err != nil {
 		return err
 	}

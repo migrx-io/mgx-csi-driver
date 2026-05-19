@@ -38,6 +38,7 @@ func setupFlags() {
 	flag.IntVar(&conf.VolumeCleanPollIntervalSec, "volume-clean-poll-interval", 2, "Interval (seconds) between volume_get polls while waiting for READY after volume_clean")
 	flag.IntVar(&conf.VolumeCleanReadyTimeoutSec, "volume-clean-ready-timeout", 60, "Total budget (seconds) to wait for volume_get to report READY after volume_clean")
 	flag.BoolVar(&conf.VolumeCleanEnabled, "volume-clean-enabled", false, "When true, NodeUnpublishVolume calls the storage.volume_clean RPC after unmount and waits for READY before returning")
+	flag.IntVar(&conf.VolumeCleanFstrimTimeoutSec, "volume-clean-fstrim-timeout", 30, "fstrim timeout (seconds) forwarded to storage.volume_clean; the backend applies it to the fstrim run on the SPDK node")
 
 	klog.InitFlags(nil)
 	if err := flag.Set("logtostderr", "true"); err != nil {

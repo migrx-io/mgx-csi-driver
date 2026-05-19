@@ -39,6 +39,10 @@ type Config struct {
 	// When false, NodeUnpublishVolume only unmounts and skips the
 	// storage.volume_clean RPC + READY wait.
 	VolumeCleanEnabled bool
+	// fstrim timeout (seconds) forwarded to storage.volume_clean. The backend
+	// applies it to the fstrim run on the SPDK node. force is not exposed —
+	// the driver always lets the backend gate on running controllers.
+	VolumeCleanFstrimTimeoutSec int
 
 	IsControllerServer bool
 	IsNodeServer       bool

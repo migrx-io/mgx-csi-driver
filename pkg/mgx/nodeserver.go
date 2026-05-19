@@ -232,7 +232,7 @@ func (ns *nodeServer) cleanVolume(volumeID string) error {
 		return fmt.Errorf("init mgx client: %w", err)
 	}
 	klog.Infof("NodeUnpublishVolume: calling volume_clean, volumeID: %s", volumeID)
-	if err := mgxClient.CleanVolume(volumeID); err != nil {
+	if err := mgxClient.CleanVolume(volumeID, ns.conf.VolumeCleanFstrimTimeoutSec); err != nil {
 		return fmt.Errorf("volume_clean: %w", err)
 	}
 	return waitVolumeReady(volumeID, mgxClient, ns.conf)

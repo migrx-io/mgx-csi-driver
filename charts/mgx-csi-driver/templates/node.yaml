@@ -81,6 +81,7 @@ spec:
         - "--volume-clean-enabled={{ .Values.node.volumeCleanEnabled }}"
         - "--volume-clean-poll-interval={{ .Values.node.volumeCleanPollInterval }}"
         - "--volume-clean-ready-timeout={{ .Values.node.volumeCleanReadyTimeout }}"
+        - "--volume-clean-fstrim-timeout={{ .Values.node.volumeCleanFstrimTimeout }}"
         - "--node"
         env:
         - name: NODE_ID

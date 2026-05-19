@@ -110,9 +110,13 @@ node:
   # volumeCleanEnabled: set to true to call the storage.volume_clean RPC on
   # NodeUnpublishVolume and wait for READY. Disabled by default — the node
   # only unmounts in that case.
+  # volumeCleanFstrimTimeout: forwarded to storage.volume_clean as the fstrim
+  # timeout (seconds) on the SPDK node. force is not exposed — the driver
+  # always lets the backend gate the clean on running controllers.
   volumeCleanEnabled: false
   volumeCleanPollInterval: 2
   volumeCleanReadyTimeout: 60
+  volumeCleanFstrimTimeout: 30
 
 # The single snapshot controller deployment works for all CSI drivers
 # in a cluster. So enable it only if you kubernetes cluster does not
