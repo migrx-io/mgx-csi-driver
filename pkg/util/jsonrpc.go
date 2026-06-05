@@ -27,6 +27,7 @@ type CreateLVolData struct {
 	Labels               string `json:"labels"`
 	CacheRCacheSize      int    `json:"cache_r_cache_size"`
 	CacheRWCacheSize     int    `json:"cache_rw_cache_size"`
+	QosRWMbytesPerSec    int    `json:"qos_rw_mbytes_per_sec"`
 	QosRMbytesPerSec     int    `json:"qos_r_mbytes_per_sec"`
 	QosWMbytesPerSec     int    `json:"qos_w_mbytes_per_sec"`
 	QosRWIosPerSec       int    `json:"qos_rw_ios_per_sec"`

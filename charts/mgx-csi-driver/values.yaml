@@ -57,6 +57,7 @@ storageclass:
 
   # qosRMBPerSec: "0"
   # qosWMBPerSec: "0"
+  # qosRWMBPerSec: "0"
   # qosRWIOPS: "0"
 
   # storageEncryptSecret: ""  # name of secret if encryption is enabled

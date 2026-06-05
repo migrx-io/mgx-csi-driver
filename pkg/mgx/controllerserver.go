@@ -515,6 +515,7 @@ func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, siz
 	// name: <name>
 	// qos_r_mbytes_per_sec: <qos_r_mbytes_per_sec>
 	// qos_rw_ios_per_sec: <qos_rw_ios_per_sec>
+	// qos_rw_mbytes_per_sec: <qos_rw_mbytes_per_sec>
 	// qos_w_mbytes_per_sec: <qos_w_mbytes_per_sec>
 	// size: <size>
 	// storage_compress: <storage_compress>
@@ -563,6 +564,10 @@ func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, siz
 	if err != nil {
 		return nil, err
 	}
+	qos_rw_mbytes_per_sec, err := getIntParameter(params, "qos_rw_mbytes_per_sec")
+	if err != nil {
+		return nil, err
+	}
 	qos_rw_ios_per_sec, err := getIntParameter(params, "qos_rw_ios_per_sec")
 	if err != nil {
 		return nil, err
@@ -582,6 +587,7 @@ func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, siz
 		CacheRWCacheSize:     cache_rw_cache_size,
 		QosRMbytesPerSec:     qos_r_mbytes_per_sec,
 		QosWMbytesPerSec:     qos_w_mbytes_per_sec,
+		QosRWMbytesPerSec:    qos_rw_mbytes_per_sec,
 		QosRWIosPerSec:       qos_rw_ios_per_sec,
 		StorageEncryptSecret: params["storage_encrypt_secret"],
 		StorageCompress:      storage_compress,

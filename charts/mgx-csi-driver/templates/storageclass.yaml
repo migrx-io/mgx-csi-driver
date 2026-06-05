@@ -24,6 +24,9 @@ parameters:
   {{- if .Values.storageclass.qosWMBPerSec }}
   qos_w_mbytes_per_sec: "{{ .Values.storageclass.qosWMBPerSec }}"
   {{- end }}
+  {{- if .Values.storageclass.qosRWMBPerSec }}
+  qos_rw_mbytes_per_sec: "{{ .Values.storageclass.qosRWMBPerSec }}"
+  {{- end }}
   {{- if .Values.storageclass.qosRWIOPS }}
   qos_rw_ios_per_sec: "{{ .Values.storageclass.qosRWIOPS }}"
   {{- end }}
