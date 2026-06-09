@@ -10,7 +10,6 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/klog"
 
 	csicommon "github.com/migrx-io/mgx-csi-driver/pkg/csi-common"
@@ -31,10 +30,6 @@ type controllerServer struct {
 
 type mgxVolume struct {
 	lvolID string
-}
-
-type mgxSnapshot struct {
-	snapshotID string
 }
 
 // CreateVolume creates a new volume in the SimplyBlock storage system.
@@ -73,6 +68,15 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	if errors.Is(err, util.ErrNotFound) {
 		klog.V(5).Infof("volume doesn't exists: %s", volumeID)
+
+		// Restore-from-snapshot: the snapshot plugin provisions the storage
+		// volume itself (restore_add -> volume_create on copy completion), so
+		// drive the restore instead of calling volume_create directly. Once
+		// the restore is READY the storage volume exists and the normal flow
+		// below picks it up on the next reconcile tick.
+		if req.GetVolumeContentSource().GetSnapshot() != nil {
+			return nil, cs.restoreVolume(req, mgxClient)
+		}
 
 		err = cs.createVolume(ctx, req, mgxClient)
 		if err != nil {
@@ -397,75 +401,6 @@ func (cs *controllerServer) ValidateVolumeCapabilities(_ context.Context, req *c
 	}, nil
 }
 
-func (cs *controllerServer) CreateSnapshot(_ context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
-	volumeID := util.PvcToVolName(req.GetSourceVolumeId())
-	klog.Infof("CreateSnapshot : volumeID=%s", volumeID)
-
-	unlock := cs.volumeLocks.Lock(volumeID)
-	defer unlock()
-
-	snapshotName := req.GetName()
-	klog.Infof("CreateSnapshot : snapshotName=%s", snapshotName)
-	mgxVol := getMGXVol(volumeID)
-
-	mgxClient, err := util.NewMGXClient()
-	if err != nil {
-		klog.Errorf("failed to create mgx client: %s", err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	snapshotID, err := mgxClient.CreateSnapshot(mgxVol.lvolID, snapshotName)
-	klog.Infof("CreateSnapshot : snapshotID: %s", snapshotID)
-	if err != nil {
-		klog.Errorf("failed to create snapshot, volumeID: %s snapshotName: %s err: %s", volumeID, snapshotName, err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	volSize, err := mgxClient.GetVolumeSize(mgxVol.lvolID)
-	klog.Infof("CreateSnapshot : volSize: %d", volSize)
-	if err != nil {
-		klog.Errorf("failed to get volume info, volumeID: %s err: %s", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	creationTime := timestamppb.Now()
-	snapshotData := csi.Snapshot{
-		SizeBytes:      int64(volSize),
-		SnapshotId:     snapshotID,
-		SourceVolumeId: mgxVol.lvolID,
-		CreationTime:   creationTime,
-		ReadyToUse:     true,
-	}
-
-	return &csi.CreateSnapshotResponse{
-		Snapshot: &snapshotData,
-	}, nil
-}
-
-func (cs *controllerServer) DeleteSnapshot(_ context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
-	csiSnapshotID := req.GetSnapshotId()
-	mgxSnapshot := getSnapshot(csiSnapshotID)
-
-	mgxClient, err := util.NewMGXClient()
-	if err != nil {
-		klog.Errorf("failed to create mgx client: %s", err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	unlock := cs.volumeLocks.Lock(csiSnapshotID)
-	defer unlock()
-
-	klog.Infof("Deleting Snapshot : csiSnapshotID=%s mgxSnapshotID=%s", csiSnapshotID, mgxSnapshot.snapshotID)
-
-	err = mgxClient.DeleteSnapshot(mgxSnapshot.snapshotID)
-	if err != nil {
-		klog.Errorf("failed to delete snapshot, snapshotID: %s err: %s", csiSnapshotID, err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	return &csi.DeleteSnapshotResponse{}, nil
-}
-
 func getIntParameter(params map[string]string, key string) (int, error) {
 	if valueStr, exists := params[key]; exists {
 		value, err := strconv.Atoi(valueStr)
@@ -636,12 +571,6 @@ func (cs *controllerServer) createVolume(ctx context.Context, req *csi.CreateVol
 func getMGXVol(csiVolumeID string) *mgxVolume {
 	return &mgxVolume{
 		lvolID: csiVolumeID,
-	}
-}
-
-func getSnapshot(csiSnapshotID string) *mgxSnapshot {
-	return &mgxSnapshot{
-		snapshotID: csiSnapshotID,
 	}
 }
 

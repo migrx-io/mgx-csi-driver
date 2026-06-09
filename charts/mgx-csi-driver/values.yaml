@@ -65,6 +65,34 @@ storageclass:
 
   # reclaimPolicy: Delete     # Delete or Retain
 
+volumeSnapshotClass:
+  # Specifies whether a VolumeSnapshotClass should be created
+  create: true
+  name: mgxcsi-snapshotclass
+  # Mark this class as the cluster default VolumeSnapshotClass
+  isDefault: false
+  # Delete or Retain — what happens to the backup when the VolumeSnapshot is removed
+  deletionPolicy: Delete
+
+  # snapshot plugin config profile (required by the driver; passed as the
+  # 'config' snapshot parameter to snapshot_add)
+  config: default
+
+  # full + incremental version history ("yes"/"no"). "yes" makes each
+  # VolumeSnapshot an independently restorable point in time (rclone
+  # --backup-dir: current/ + incremental/<stamp>/). "no" is a single rolling
+  # latest-only backup where snapshots overwrite each other and point-in-time
+  # restore is impossible.
+  incremental: "yes"
+
+  # Destination S3 storage class for backup objects. Overrides the config
+  # profile's storage_class. Empty = use the bucket default (the parameter is
+  # not sent). Typical values: STANDARD, STANDARD_IA, GLACIER, DEEP_ARCHIVE.
+  storageClass: ""
+
+  # Optional per-snapshot overrides forwarded to the snapshot plugin.
+  # labels: "storage=mgx"
+
 externallyManagedSecret:
   # Specifies whether a externallyManagedConfigmap should be created
   create: true 

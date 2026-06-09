@@ -42,18 +42,26 @@ type LvolResp struct {
 	Port   int    `json:"proxy_port"`
 	IP     string `json:"ip"`
 	Status string `json:"status"`
+	SCNode string `json:"sc_node"`
 	Error  string `json:"error"`
 }
 
+// SnapshotResp mirrors the mgx-plgn-snapshot Snapshot model. A record owns a
+// volume's whole backup chain (keyed by Name); each k8s VolumeSnapshot is one
+// restore point (Stamp) within it. Restore records (Kind == "restore") reuse
+// the same model.
 type SnapshotResp struct {
-	Name         string `json:"name"`
-	UUID         string `json:"uuid"`
-	Size         int64  `json:"size"`
-	Pool         string `json:"pool"`
-	CreatedAt    string `json:"created_at"`
-	SourceVolume struct {
-		UUID string `json:"id"`
-	} `json:"lvol"`
+	Name       string `json:"name"`
+	Config     string `json:"config"`
+	Kind       string `json:"kind"`
+	Volume     string `json:"volume"`
+	Stamp      string `json:"stamp"`
+	Increments any    `json:"increments"`
+	Size       int64  `json:"size"`
+	Created    string `json:"created"`
+	SCNode     string `json:"sc_node"`
+	Status     string `json:"status"`
+	Error      string `json:"error"`
 }
 
 type RPCClient struct {
@@ -243,28 +251,35 @@ func (*RPCClient) publishVolume(lvolID string) error {
 	return nil
 }
 
-func (client *RPCClient) getVolume(lvolID string) (*LvolResp, error) {
+// showByName issues a "<plugin>_show"-style RPC that takes a single "name"
+// parameter and decodes the result into *T. Shared by volume_show and
+// snapshot_show, which differ only in plugin/op and result type.
+func showByName[T any](client *RPCClient, plugin, op, name string) (*T, error) {
 	params := map[string]any{
-		"name": lvolID,
+		"name": name,
 	}
 
-	klog.V(5).Infof("getVolume, params: %v", &params)
+	klog.V(5).Infof("%s, params: %v", op, &params)
 
-	out, err := client.Call("storage", "volume_show", &params)
+	out, err := client.Call(plugin, op, &params)
 	if err != nil {
 		return nil, err
 	}
 
-	var result *LvolResp
+	var result *T
 	respBytes, _ := json.Marshal(out)
 
 	if err := json.Unmarshal(respBytes, &result); err != nil {
 		return nil, fmt.Errorf("invalid or empty response")
 	}
 
-	klog.V(5).Infof("getVolume result: %v", result)
+	klog.V(5).Infof("%s result: %v", op, result)
 
 	return result, nil
+}
+
+func (client *RPCClient) getVolume(lvolID string) (*LvolResp, error) {
+	return showByName[LvolResp](client, "storage", "volume_show", lvolID)
 }
 
 func (client *RPCClient) deleteVolume(lvolID string) error {
@@ -346,26 +361,67 @@ func (client *RPCClient) resizeVolume(lvolID string, updatedSize int64) error {
 	return err
 }
 
-func (*RPCClient) listSnapshots() ([]*SnapshotResp, error) {
-	var results []*SnapshotResp
+func (client *RPCClient) snapshotShow(name string) (*SnapshotResp, error) {
+	return showByName[SnapshotResp](client, "snapshot", "snapshot_show", name)
+}
 
-	klog.V(5).Info("listSnapshots")
+// snapshotAdd arms a backup/restore point. params carries the snapshot_add meta
+// fields (name, config, volume, sc_node, stamp, and any overrides). Idempotent
+// on the caller-owned stamp.
+func (client *RPCClient) snapshotAdd(params map[string]any) error {
+	klog.V(5).Infof("snapshotAdd: %v", &params)
+
+	_, err := client.Call("snapshot", "snapshot_add", &params)
+	return err
+}
+
+// restoreAdd schedules a restore of a backed-up snapshot into a new volume
+// prefix. params carries the restore_add meta fields. Idempotent on name.
+func (client *RPCClient) restoreAdd(params map[string]any) error {
+	klog.V(5).Infof("restoreAdd: %v", &params)
+
+	_, err := client.Call("snapshot", "restore_add", &params)
+	return err
+}
+
+// snapshotDel removes one restore point (delStamp set) or the whole backup
+// record (delStamp empty). Only the oldest stamp may be deleted; deleting the
+// last point drops the whole backup.
+func (client *RPCClient) snapshotDel(name, delStamp string, purge bool) error {
+	params := map[string]any{
+		"name": name,
+	}
+	if delStamp != "" {
+		params["del_stamp"] = delStamp
+	}
+	if purge {
+		params["purge"] = "yes"
+	}
+
+	klog.V(5).Infof("snapshotDel: %v", &params)
+
+	_, err := client.Call("snapshot", "snapshot_del", &params)
+	return err
+}
+
+func (client *RPCClient) snapshotList() ([]*SnapshotResp, error) {
+	params := map[string]any{}
+
+	klog.V(5).Info("snapshotList")
+
+	out, err := client.Call("snapshot", "snapshot_list", &params)
+	if err != nil {
+		return nil, err
+	}
+
+	var results []*SnapshotResp
+	respBytes, _ := json.Marshal(out)
+
+	if err := json.Unmarshal(respBytes, &results); err != nil {
+		return nil, fmt.Errorf("invalid or empty response")
+	}
 
 	return results, nil
-}
-
-func (*RPCClient) createSnapshot(lvolID, snapShotName string) (string, error) { //nolint:unparam // placeholder for future error handling
-	var snapshotID string
-
-	klog.V(5).Infof("createSnapshot: %s, %s", lvolID, snapShotName)
-
-	return snapshotID, nil
-}
-
-func (*RPCClient) deleteSnapshot(snapshotID string) error {
-	klog.V(5).Infof("deleteSnapshot: %s", snapshotID)
-
-	return nil
 }
 
 func (*RPCClient) unpublishVolume(lvolID string) error {

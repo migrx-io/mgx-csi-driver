@@ -126,25 +126,42 @@ func (node *NodeNVMf) ResizeVolume(lvolID string, updatedSize int64) error {
 }
 
 func (node *NodeNVMf) ListSnapshots() ([]*SnapshotResp, error) {
-	return node.Client.listSnapshots()
+	return node.Client.snapshotList()
 }
 
-// CreateSnapshot creates a snapshot of a volume
-func (node *NodeNVMf) CreateSnapshot(lvolID, snapshotName string) (string, error) {
-	snapshotID, err := node.Client.createSnapshot(lvolID, snapshotName)
-	if err != nil {
-		return "", err
+// ShowSnapshot returns a snapshot/restore record from the snapshot plugin.
+func (node *NodeNVMf) ShowSnapshot(name string) (*SnapshotResp, error) {
+	return node.Client.snapshotShow(name)
+}
+
+// AddSnapshot arms a backup restore point on the volume's record. params carries
+// the snapshot_add meta fields. Idempotent on the caller-owned stamp.
+func (node *NodeNVMf) AddSnapshot(params map[string]any) error {
+	if err := node.Client.snapshotAdd(params); err != nil {
+		return err
 	}
-	klog.V(5).Infof("snapshot created: %s", snapshotID)
-	return snapshotID, nil
+	klog.V(5).Infof("snapshot armed: %v", params["name"])
+	return nil
 }
 
-func (node *NodeNVMf) DeleteSnapshot(snapshotID string) error {
-	err := node.Client.deleteSnapshot(snapshotID)
+// AddRestore schedules a restore of a backed-up snapshot into a new volume
+// prefix. params carries the restore_add meta fields. Idempotent on name.
+func (node *NodeNVMf) AddRestore(params map[string]any) error {
+	if err := node.Client.restoreAdd(params); err != nil {
+		return err
+	}
+	klog.V(5).Infof("restore scheduled: %v", params["name"])
+	return nil
+}
+
+// DeleteSnapshot removes one restore point (delStamp set) or the whole backup
+// record (delStamp empty).
+func (node *NodeNVMf) DeleteSnapshot(name, delStamp string, purge bool) error {
+	err := node.Client.snapshotDel(name, delStamp, purge)
 	if err != nil {
 		return err
 	}
-	klog.V(5).Infof("snapshot deleted: %s", snapshotID)
+	klog.V(5).Infof("snapshot deleted: %s stamp: %s", name, delStamp)
 	return nil
 }
 
