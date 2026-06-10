@@ -166,7 +166,7 @@ externalSnapshotter:
   customResourceDefinitions:
     # if set true, VolumeSnapshot, VolumeSnapshotContent and
     # VolumeSnapshotClass CRDs will be created.
-    enabled: true
+    enabled: false
 
 # Configuration for the csiSecret
 csiSecret:
