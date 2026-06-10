@@ -214,6 +214,41 @@ func (cs *controllerServer) DeleteSnapshot(_ context.Context, req *csi.DeleteSna
 	return &csi.DeleteSnapshotResponse{}, nil
 }
 
+// scheduleRestore (re)schedules the restore via the snapshot plugin. Called on
+// the first CreateVolume (no record yet) and to re-arm a FAILED restore -
+// restore_add is idempotent on name and resets a FAILED record to PENDING
+// (purging the partial target) so the retry runs clean. It inherits the
+// snapshot config + node from the source backup record.
+func (*controllerServer) scheduleRestore(req *csi.CreateVolumeRequest, mgxClient *util.NodeNVMf, restoreName, record, stamp, volumeID, volumeConfig string) error {
+	src, serr := mgxClient.ShowSnapshot(record)
+	if serr != nil {
+		if errors.Is(serr, util.ErrNotFound) {
+			return status.Errorf(codes.NotFound, "source snapshot %s not found", record)
+		}
+		klog.Errorf("scheduleRestore: show source snapshot, record: %s err: %s", record, serr)
+		return status.Error(codes.Internal, serr.Error())
+	}
+
+	restoreParams := map[string]any{
+		"name":          restoreName,
+		"config":        src.Config,
+		"snapshot":      record,
+		"target":        volumeID,
+		"volume_config": volumeConfig,
+		"sc_node":       src.SCNode,
+		"restore_to":    stamp,
+	}
+	if v := req.GetParameters()["labels"]; v != "" {
+		restoreParams["labels"] = v
+	}
+
+	if aerr := mgxClient.AddRestore(restoreParams); aerr != nil {
+		klog.Errorf("scheduleRestore: restore_add failed, restoreName: %s err: %s", restoreName, aerr)
+		return status.Error(codes.Internal, aerr.Error())
+	}
+	return nil
+}
+
 // restoreVolume drives a restore-from-snapshot. The snapshot plugin reads the
 // backed-up data and, on completion, provisions the target storage volume
 // itself (volume_create), so the driver only schedules the restore and waits.
@@ -226,7 +261,7 @@ func (cs *controllerServer) DeleteSnapshot(_ context.Context, req *csi.DeleteSna
 // drives it to READY, returning Aborted on every tick so the external-provisioner
 // re-calls CreateVolume. The provisioned volume is picked up and published by the
 // normal CreateVolume path once it exists, so there is no success response here.
-func (*controllerServer) restoreVolume(req *csi.CreateVolumeRequest, mgxClient *util.NodeNVMf) error {
+func (cs *controllerServer) restoreVolume(req *csi.CreateVolumeRequest, mgxClient *util.NodeNVMf) error {
 	volumeID := util.PvcToVolName(req.GetName())
 	sourceSnapshotID := req.GetVolumeContentSource().GetSnapshot().GetSnapshotId()
 
@@ -249,41 +284,25 @@ func (*controllerServer) restoreVolume(req *csi.CreateVolumeRequest, mgxClient *
 	}
 
 	if errors.Is(err, util.ErrNotFound) {
-		// First call: inherit the snapshot config + node from the source record
-		// and schedule the restore.
-		src, serr := mgxClient.ShowSnapshot(record)
-		if serr != nil {
-			if errors.Is(serr, util.ErrNotFound) {
-				return status.Errorf(codes.NotFound, "source snapshot %s not found", record)
-			}
-			klog.Errorf("restoreVolume: show source snapshot, record: %s err: %s", record, serr)
-			return status.Error(codes.Internal, serr.Error())
+		// First call: schedule the restore.
+		if serr := cs.scheduleRestore(req, mgxClient, restoreName, record, stamp, volumeID, volumeConfig); serr != nil {
+			return serr
 		}
-
-		restoreParams := map[string]any{
-			"name":          restoreName,
-			"config":        src.Config,
-			"snapshot":      record,
-			"target":        volumeID,
-			"volume_config": volumeConfig,
-			"sc_node":       src.SCNode,
-			"restore_to":    stamp,
-		}
-		if v := req.GetParameters()["labels"]; v != "" {
-			restoreParams["labels"] = v
-		}
-
-		if aerr := mgxClient.AddRestore(restoreParams); aerr != nil {
-			klog.Errorf("restoreVolume: restore_add failed, restoreName: %s err: %s", restoreName, aerr)
-			return status.Error(codes.Internal, aerr.Error())
-		}
-
 		klog.Infof("restoreVolume: scheduled restoreName=%s target=%s record=%s stamp=%s", restoreName, volumeID, record, stamp)
 		return status.Error(codes.Aborted, fmt.Sprintf("restore %s is creating", volumeID))
 	}
 
 	if rec.Status == SnapshotStatusFailed {
-		return status.Errorf(codes.Internal, "restore %s failed: %s", restoreName, rec.Error)
+		// A failed restore is terminal on the plugin and left a partial target
+		// behind. Re-arm it (restore_add resets FAILED -> PENDING and purges the
+		// partial target) and keep driving it, so a transient failure self-heals
+		// instead of wedging the PVC. The error is surfaced via the Aborted
+		// message while it retries.
+		klog.Warningf("restoreVolume: restore %s FAILED (%s), re-arming", restoreName, rec.Error)
+		if serr := cs.scheduleRestore(req, mgxClient, restoreName, record, stamp, volumeID, volumeConfig); serr != nil {
+			return serr
+		}
+		return status.Error(codes.Aborted, fmt.Sprintf("restore %s failed, retrying: %s", restoreName, rec.Error))
 	}
 
 	if rec.Status != SnapshotStatusReady {

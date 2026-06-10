@@ -38,16 +38,9 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
 
-	var err error
-
 	// --- reject unsupported access modes ---
-	for _, vc := range req.GetVolumeCapabilities() {
-		mode := vc.GetAccessMode().GetMode()
-		if mode != csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER &&
-			mode != csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER {
-			return nil, status.Error(codes.InvalidArgument,
-				"Only ReadWriteOnce (RWO) and ReadWriteOncePod (RWOP) are supported by this driver")
-		}
+	if err := validateAccessModes(req.GetVolumeCapabilities()); err != nil {
+		return nil, err
 	}
 
 	mgxClient, err := util.NewMGXClient()
@@ -105,6 +98,17 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	klog.Infof("volume is published: volumeInfo: %v", volumeInfo)
 
+	// A restore-provisioned volume now exists and is published, so the
+	// restore-<vol> bookkeeping record is no longer needed. Drop it (keep the
+	// data, purge=false - the target IS this volume) so a future PVC with the
+	// same name isn't blocked by a stale record. Best-effort.
+	if req.GetVolumeContentSource().GetSnapshot() != nil {
+		restoreName := restoreNamePrefix + volumeID
+		if derr := mgxClient.DeleteSnapshot(restoreName, "", false); derr != nil && !errors.Is(derr, util.ErrNotFound) {
+			klog.Warningf("CreateVolume: cleanup restore record %s failed (ignored): %s", restoreName, derr)
+		}
+	}
+
 	csiVolume := cs.GetCSIVolume(req)
 
 	// copy volume info. node needs these info to contact target(ip, port, nqn, ...)
@@ -117,6 +121,19 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	return &csi.CreateVolumeResponse{Volume: csiVolume}, nil
+}
+
+// validateAccessModes rejects any access mode other than RWO/RWOP.
+func validateAccessModes(caps []*csi.VolumeCapability) error {
+	for _, vc := range caps {
+		mode := vc.GetAccessMode().GetMode()
+		if mode != csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER &&
+			mode != csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER {
+			return status.Error(codes.InvalidArgument,
+				"Only ReadWriteOnce (RWO) and ReadWriteOncePod (RWOP) are supported by this driver")
+		}
+	}
+	return nil
 }
 
 func (cs *controllerServer) UnIdleVolume(volumeID string) error {
@@ -215,6 +232,15 @@ func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 	}
 
 	klog.V(5).Info("mgxClient is created..")
+
+	// Drop any lingering restore-<vol> bookkeeping record (e.g. a restore the
+	// user gave up on). Done before the volume lookup so it also clears records
+	// for volumes that never finished provisioning. Keep the data (purge=false)
+	// - the storage volume itself is removed below. Best-effort.
+	restoreName := restoreNamePrefix + volumeID
+	if derr := mgxClient.DeleteSnapshot(restoreName, "", false); derr != nil && !errors.Is(derr, util.ErrNotFound) {
+		klog.Warningf("DeleteVolume: cleanup restore record %s failed (ignored): %s", restoreName, derr)
+	}
 
 	// check if volume exists and DELETED
 	volume, err := mgxClient.GetVolume(volumeID)
