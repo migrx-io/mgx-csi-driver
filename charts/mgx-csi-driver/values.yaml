@@ -42,6 +42,12 @@ storageclass:
   # Specifies whether  should be created
   create: true
 
+  # Storage config profile name (optional). Leave unset to let the pool
+  # default it server-side: each pool is its own cluster with a single
+  # storage config named after the pool, and volumes resolve to it
+  # automatically. Set this only to target a specific named config.
+  # config: pool1
+
   # Custom labels (optional)
   # labels: "storage=mgx"
 
@@ -74,9 +80,11 @@ volumeSnapshotClass:
   # Delete or Retain — what happens to the backup when the VolumeSnapshot is removed
   deletionPolicy: Delete
 
-  # snapshot plugin config profile (required by the driver; passed as the
-  # 'config' snapshot parameter to snapshot_add)
-  config: default
+  # snapshot plugin config profile (optional). Leave unset to let the pool
+  # default it server-side: each pool is its own cluster with a single
+  # snapshot config named after the pool. Set this only to target a
+  # specific named config.
+  # config: pool1
 
   # full + incremental version history ("yes"/"no"). "yes" makes each
   # VolumeSnapshot an independently restorable point in time (rclone

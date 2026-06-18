@@ -6,7 +6,9 @@ metadata:
   name: mgxcsi-sc
 provisioner: csi.migrx.io
 parameters:
-  config: {{ .Values.storageclass.config | default "default" }}
+  {{- if .Values.storageclass.config }}
+  config: {{ .Values.storageclass.config }}
+  {{- end }}
   {{- if .Values.storageclass.labels }}
   labels: {{ .Values.storageclass.labels }}
   {{- else }}

@@ -92,10 +92,10 @@ func (cs *controllerServer) CreateSnapshot(_ context.Context, req *csi.CreateSna
 		return nil, status.Error(codes.InvalidArgument, "snapshot name missing")
 	}
 
+	// Optional: when unset the snapshot plugin defaults to the pool's single
+	// snapshot config (each pool is its own cluster with one config named
+	// after the pool).
 	config := req.GetParameters()["config"]
-	if config == "" {
-		return nil, status.Error(codes.InvalidArgument, "snapshot class parameter 'config' is required")
-	}
 
 	record := volumeID
 	stamp := snapshotStamp(snapshotName)
@@ -270,10 +270,9 @@ func (cs *controllerServer) restoreVolume(req *csi.CreateVolumeRequest, mgxClien
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
 
+	// Optional: when unset the storage plugin defaults the restored volume to
+	// the pool's single storage config (named after the pool).
 	volumeConfig := req.GetParameters()["config"]
-	if volumeConfig == "" {
-		return status.Error(codes.InvalidArgument, "storage class parameter 'config' is required")
-	}
 
 	restoreName := restoreNamePrefix + volumeID
 

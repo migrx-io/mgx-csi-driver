@@ -11,7 +11,9 @@ metadata:
 driver: {{ .Values.driverName }}
 deletionPolicy: {{ .Values.volumeSnapshotClass.deletionPolicy | default "Delete" }}
 parameters:
-  config: {{ .Values.volumeSnapshotClass.config | default "default" }}
+  {{- if .Values.volumeSnapshotClass.config }}
+  config: {{ .Values.volumeSnapshotClass.config }}
+  {{- end }}
   {{- if .Values.volumeSnapshotClass.labels }}
   labels: {{ .Values.volumeSnapshotClass.labels }}
   {{- end }}
