@@ -217,11 +217,19 @@ func (cs *controllerServer) DeleteSnapshot(_ context.Context, req *csi.DeleteSna
 // scheduleRestore (re)schedules the restore via the snapshot plugin. Called on
 // the first CreateVolume (no record yet) and to re-arm a FAILED restore -
 // restore_add is idempotent on name and resets a FAILED record to PENDING
-// (purging the partial target) so the retry runs clean. It inherits the
-// snapshot config + node from the source backup record.
+// (purging the partial target) so the retry runs clean.
+//
+// The restore does NOT inherit the source snapshot's config/sc_node: those are
+// source-pool values, but a restore may be placed on a DIFFERENT pool (chosen
+// by `labels` via mgmt find_pool). The target pool resolves its own snapshot
+// config (its single default) and runs on its own node; mgmt pre-resolves the
+// source snapshot's data (volume/size/increments/stamp) into the replayed
+// request so the target pool needs no local source record, and the backup is
+// reachable cross-pool via the shared backup bucket.
 func (*controllerServer) scheduleRestore(req *csi.CreateVolumeRequest, mgxClient *util.NodeNVMf, restoreName, record, stamp, volumeID, volumeConfig string) error {
-	src, serr := mgxClient.ShowSnapshot(record)
-	if serr != nil {
+	// validate the source exists (fail fast with a clear NotFound); its
+	// config/node are intentionally not copied onto the restore (see above).
+	if _, serr := mgxClient.ShowSnapshot(record); serr != nil {
 		if errors.Is(serr, util.ErrNotFound) {
 			return status.Errorf(codes.NotFound, "source snapshot %s not found", record)
 		}
@@ -231,11 +239,9 @@ func (*controllerServer) scheduleRestore(req *csi.CreateVolumeRequest, mgxClient
 
 	restoreParams := map[string]any{
 		"name":          restoreName,
-		"config":        src.Config,
 		"snapshot":      record,
 		"target":        volumeID,
 		"volume_config": volumeConfig,
-		"sc_node":       src.SCNode,
 		"restore_to":    stamp,
 	}
 	if v := req.GetParameters()["labels"]; v != "" {
