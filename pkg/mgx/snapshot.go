@@ -124,29 +124,14 @@ func (cs *controllerServer) CreateSnapshot(_ context.Context, req *csi.CreateSna
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	addParams := map[string]any{
-		"name":    record,
-		"config":  config,
-		"volume":  volumeID,
-		"sc_node": volume.SCNode,
-		"stamp":   stamp,
-	}
-	// Optional per-snapshot overrides from the VolumeSnapshotClass.
-	for _, k := range []string{"incremental", "mode", "storage_class", "labels"} {
-		if v := req.GetParameters()[k]; v != "" {
-			addParams[k] = v
-		}
-	}
-
-	if err = mgxClient.AddSnapshot(addParams); err != nil {
-		klog.Errorf("CreateSnapshot: snapshot_add failed, record: %s stamp: %s err: %s", record, stamp, err)
-		return nil, status.Error(codes.Internal, err.Error())
-	}
-
-	rec, err := mgxClient.ShowSnapshot(record)
+	// Check whether this restore point is already armed before touching the
+	// plugin. The external-snapshotter re-calls CreateSnapshot until
+	// ReadyToUse=true (and again on later re-syncs); snapshot_add must fire only
+	// once per stamp, not on every reconcile. A record whose current Stamp
+	// already equals ours means the increment is armed - just poll its status.
+	rec, err := armRestorePoint(mgxClient, req, record, stamp, config, volume)
 	if err != nil {
-		klog.Errorf("CreateSnapshot: snapshot_show failed, record: %s err: %s", record, err)
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, err
 	}
 
 	if rec.Status == SnapshotStatusFailed {
@@ -174,6 +159,50 @@ func (cs *controllerServer) CreateSnapshot(_ context.Context, req *csi.CreateSna
 			ReadyToUse:     ready,
 		},
 	}, nil
+}
+
+// armRestorePoint ensures the backup record has this stamp armed and returns its
+// current state. It reads the record, and if it's missing or armed for a
+// different stamp, fires the idempotent snapshot_add and re-reads. An already
+// armed record is returned as-is so CreateSnapshot can just poll its status.
+func armRestorePoint(mgxClient *util.NodeNVMf, req *csi.CreateSnapshotRequest, record, stamp, config string, volume *util.LvolResp) (*util.SnapshotResp, error) {
+	rec, err := mgxClient.ShowSnapshot(record)
+	if err != nil && !errors.Is(err, util.ErrNotFound) {
+		klog.Errorf("CreateSnapshot: snapshot_show failed, record: %s err: %s", record, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	if err == nil && rec.Stamp == stamp {
+		klog.Infof("CreateSnapshot: restore point already armed, record: %s stamp: %s status: %s", record, stamp, rec.Status)
+		return rec, nil
+	}
+
+	// Record missing, or armed for a different stamp: arm this restore point.
+	addParams := map[string]any{
+		"name":    record,
+		"config":  config,
+		"volume":  req.GetSourceVolumeId(),
+		"sc_node": volume.SCNode,
+		"stamp":   stamp,
+	}
+	// Optional per-snapshot overrides from the VolumeSnapshotClass.
+	for _, k := range []string{"incremental", "mode", "storage_class", "labels"} {
+		if v := req.GetParameters()[k]; v != "" {
+			addParams[k] = v
+		}
+	}
+
+	if aerr := mgxClient.AddSnapshot(addParams); aerr != nil {
+		klog.Errorf("CreateSnapshot: snapshot_add failed, record: %s stamp: %s err: %s", record, stamp, aerr)
+		return nil, status.Error(codes.Internal, aerr.Error())
+	}
+
+	rec, err = mgxClient.ShowSnapshot(record)
+	if err != nil {
+		klog.Errorf("CreateSnapshot: snapshot_show failed, record: %s err: %s", record, err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return rec, nil
 }
 
 // DeleteSnapshot removes one restore point (the stamp) from its backup record.
