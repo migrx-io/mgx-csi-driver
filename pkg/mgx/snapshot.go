@@ -277,6 +277,26 @@ func (*controllerServer) scheduleRestore(req *csi.CreateVolumeRequest, mgxClient
 		restoreParams["labels"] = v
 	}
 
+	// Propagate the same StorageClass-driven cache/QoS/storage settings a plain
+	// CreateVolume applies, so the restored volume is provisioned with them
+	// instead of falling back to the target pool's default config. The snapshot
+	// plugin forwards these into its volume_create at provision time.
+	sizeMiB := util.BytesToMB(req.GetCapacityRange().GetRequiredBytes())
+	tuning, terr := extractVolumeTuning(req.GetParameters(), sizeMiB)
+	if terr != nil {
+		return status.Error(codes.InvalidArgument, terr.Error())
+	}
+	restoreParams["cache_r_cache_size"] = tuning.CacheRCacheSize
+	restoreParams["cache_rw_cache_size"] = tuning.CacheRWCacheSize
+	restoreParams["qos_r_mbytes_per_sec"] = tuning.QosRMbytesPerSec
+	restoreParams["qos_w_mbytes_per_sec"] = tuning.QosWMbytesPerSec
+	restoreParams["qos_rw_mbytes_per_sec"] = tuning.QosRWMbytesPerSec
+	restoreParams["qos_rw_ios_per_sec"] = tuning.QosRWIosPerSec
+	restoreParams["storage_compress"] = tuning.StorageCompress
+	if tuning.StorageEncryptSecret != "" {
+		restoreParams["storage_encrypt_secret"] = tuning.StorageEncryptSecret
+	}
+
 	if aerr := mgxClient.AddRestore(restoreParams); aerr != nil {
 		klog.Errorf("scheduleRestore: restore_add failed, restoreName: %s err: %s", restoreName, aerr)
 		return status.Error(codes.Internal, aerr.Error())

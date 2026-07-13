@@ -466,26 +466,26 @@ func calculateCacheSize(sizeMiB, minMiB, maxMiB int, ratio float64) int {
 	return calculated
 }
 
-func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, sizeMiB int64) (*util.CreateLVolData, error) {
-	params := req.GetParameters()
+// volumeTuning holds the per-volume cache/QoS/storage knobs derived from
+// StorageClass parameters. It is shared by CreateVolume and the restore path so
+// a restored volume is provisioned with the same StorageClass-driven settings
+// as a freshly created one, instead of falling back to the target pool's
+// default config.
+type volumeTuning struct {
+	CacheRCacheSize      int
+	CacheRWCacheSize     int
+	QosRMbytesPerSec     int
+	QosWMbytesPerSec     int
+	QosRWMbytesPerSec    int
+	QosRWIosPerSec       int
+	StorageCompress      int
+	StorageEncryptSecret string
+}
 
-	// cache_r_cache_size: <cache_r_cache_size>
-	// cache_rw_cache_size: <cache_rw_cache_size>
-	// config: <config>
-	// labels: <labels>
-	// name: <name>
-	// qos_r_mbytes_per_sec: <qos_r_mbytes_per_sec>
-	// qos_rw_ios_per_sec: <qos_rw_ios_per_sec>
-	// qos_rw_mbytes_per_sec: <qos_rw_mbytes_per_sec>
-	// qos_w_mbytes_per_sec: <qos_w_mbytes_per_sec>
-	// size: <size>
-	// storage_compress: <storage_compress>
-	// storage_encrypt_secret: <storage_encrypt_secret>
-
-	//
-	// calculate cache size based on volume size request
-	//
-
+// extractVolumeTuning derives the cache/QoS/storage settings from StorageClass
+// parameters. Cache sizes are computed from the requested volume size using the
+// min/max/ratio parameters (see calculateCacheSize).
+func extractVolumeTuning(params map[string]string, sizeMiB int64) (*volumeTuning, error) {
 	min_cache_r_cache_size, err := getIntParameter(params, "min_cache_r_cache_size")
 	if err != nil {
 		return nil, err
@@ -513,10 +513,6 @@ func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, siz
 		return nil, err
 	}
 
-	// calc cache size based on cache attributes
-	cache_r_cache_size := calculateCacheSize(int(sizeMiB), min_cache_r_cache_size, max_cache_r_cache_size, ratio_cache_r_cache_size)
-	cache_rw_cache_size := calculateCacheSize(int(sizeMiB), min_cache_rw_cache_size, max_cache_rw_cache_size, ratio_cache_rw_cache_size)
-
 	qos_r_mbytes_per_sec, err := getIntParameter(params, "qos_r_mbytes_per_sec")
 	if err != nil {
 		return nil, err
@@ -539,19 +535,57 @@ func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, siz
 		return nil, err
 	}
 
+	return &volumeTuning{
+		// calc cache size based on cache attributes and the requested size
+		CacheRCacheSize:      calculateCacheSize(int(sizeMiB), min_cache_r_cache_size, max_cache_r_cache_size, ratio_cache_r_cache_size),
+		CacheRWCacheSize:     calculateCacheSize(int(sizeMiB), min_cache_rw_cache_size, max_cache_rw_cache_size, ratio_cache_rw_cache_size),
+		QosRMbytesPerSec:     qos_r_mbytes_per_sec,
+		QosWMbytesPerSec:     qos_w_mbytes_per_sec,
+		QosRWMbytesPerSec:    qos_rw_mbytes_per_sec,
+		QosRWIosPerSec:       qos_rw_ios_per_sec,
+		StorageCompress:      storage_compress,
+		StorageEncryptSecret: params["storage_encrypt_secret"],
+	}, nil
+}
+
+func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, sizeMiB int64) (*util.CreateLVolData, error) {
+	params := req.GetParameters()
+
+	// cache_r_cache_size: <cache_r_cache_size>
+	// cache_rw_cache_size: <cache_rw_cache_size>
+	// config: <config>
+	// labels: <labels>
+	// name: <name>
+	// qos_r_mbytes_per_sec: <qos_r_mbytes_per_sec>
+	// qos_rw_ios_per_sec: <qos_rw_ios_per_sec>
+	// qos_rw_mbytes_per_sec: <qos_rw_mbytes_per_sec>
+	// qos_w_mbytes_per_sec: <qos_w_mbytes_per_sec>
+	// size: <size>
+	// storage_compress: <storage_compress>
+	// storage_encrypt_secret: <storage_encrypt_secret>
+
+	//
+	// calculate cache size based on volume size request
+	//
+
+	tuning, err := extractVolumeTuning(params, sizeMiB)
+	if err != nil {
+		return nil, err
+	}
+
 	createVolReq := util.CreateLVolData{
 		Name:                 util.PvcToVolName(req.GetName()),
 		Size:                 sizeMiB,
 		Config:               params["config"],
 		Labels:               params["labels"],
-		CacheRCacheSize:      cache_r_cache_size,
-		CacheRWCacheSize:     cache_rw_cache_size,
-		QosRMbytesPerSec:     qos_r_mbytes_per_sec,
-		QosWMbytesPerSec:     qos_w_mbytes_per_sec,
-		QosRWMbytesPerSec:    qos_rw_mbytes_per_sec,
-		QosRWIosPerSec:       qos_rw_ios_per_sec,
-		StorageEncryptSecret: params["storage_encrypt_secret"],
-		StorageCompress:      storage_compress,
+		CacheRCacheSize:      tuning.CacheRCacheSize,
+		CacheRWCacheSize:     tuning.CacheRWCacheSize,
+		QosRMbytesPerSec:     tuning.QosRMbytesPerSec,
+		QosWMbytesPerSec:     tuning.QosWMbytesPerSec,
+		QosRWMbytesPerSec:    tuning.QosRWMbytesPerSec,
+		QosRWIosPerSec:       tuning.QosRWIosPerSec,
+		StorageEncryptSecret: tuning.StorageEncryptSecret,
+		StorageCompress:      tuning.StorageCompress,
 	}
 	return &createVolReq, nil
 }
