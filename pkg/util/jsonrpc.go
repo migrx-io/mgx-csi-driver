@@ -448,6 +448,15 @@ func errorMatches(errString string, err error) bool {
 	if errString == "" {
 		return false
 	}
-	strErr := strings.ToLower(err.Error())
-	return strings.Contains(errString, strErr)
+	msg := strings.ToLower(strings.TrimSpace(errString))
+	sentinel := strings.ToLower(err.Error()) // e.g. "not found"
+	// Only the canonical existence error "<resource> not found" (a single
+	// resource token before the phrase) maps to NotFound. A validation error
+	// that merely contains the phrase - e.g. "restore point <x> not found" -
+	// must surface as a real failure, not be swallowed as "already gone".
+	if !strings.HasSuffix(msg, sentinel) {
+		return false
+	}
+	prefix := strings.TrimSpace(strings.TrimSuffix(msg, sentinel))
+	return prefix != "" && !strings.Contains(prefix, " ")
 }

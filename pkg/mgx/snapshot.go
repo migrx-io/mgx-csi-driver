@@ -134,15 +134,28 @@ func (cs *controllerServer) CreateSnapshot(_ context.Context, req *csi.CreateSna
 		return nil, err
 	}
 
-	if rec.Status == SnapshotStatusFailed {
-		return nil, status.Errorf(codes.Internal, "snapshot %s failed: %s", snapshotID, rec.Error)
-	}
-
 	// size is the logical volume size in MB, set on create; fall back to the
 	// live source volume size if the record hasn't recorded it yet.
 	sizeBytes := rec.Size * bytesPerMB
 	if sizeBytes == 0 {
 		sizeBytes = int64(volume.Size) * bytesPerMB
+	}
+
+	if rec.Status == SnapshotStatusFailed {
+		// Re-armed above; the plugin heals (rewind) then the next reconcile
+		// re-runs. Report not-ready so the external-snapshotter keeps retrying
+		// until the backup completes, instead of a terminal error that wedges
+		// the VolumeSnapshot at not-ready forever.
+		klog.Warningf("CreateSnapshot: snapshot %s FAILED (%s), re-arming for retry", snapshotID, rec.Error)
+		return &csi.CreateSnapshotResponse{
+			Snapshot: &csi.Snapshot{
+				SizeBytes:      sizeBytes,
+				SnapshotId:     snapshotID,
+				SourceVolumeId: volumeID,
+				CreationTime:   parseSnapshotTime(rec.Created),
+				ReadyToUse:     false,
+			},
+		}, nil
 	}
 
 	ready := rec.Status == SnapshotStatusReady
@@ -172,12 +185,16 @@ func armRestorePoint(mgxClient *util.NodeNVMf, req *csi.CreateSnapshotRequest, r
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if err == nil && rec.Stamp == stamp {
+	if err == nil && rec.Stamp == stamp && rec.Status != SnapshotStatusFailed {
 		klog.Infof("CreateSnapshot: restore point already armed, record: %s stamp: %s status: %s", record, stamp, rec.Status)
 		return rec, nil
 	}
 
-	// Record missing, or armed for a different stamp: arm this restore point.
+	// Record missing, armed for a different stamp, or FAILED (needs heal/re-arm):
+	// arm this restore point. On a FAILED record the plugin turns this idempotent
+	// snapshot_add into a rewind (REWINDING) that heals the torn state, then
+	// settles clean so the next call re-arms - so a transient failure self-heals
+	// instead of wedging the snapshot.
 	addParams := map[string]any{
 		"name":    record,
 		"config":  config,
