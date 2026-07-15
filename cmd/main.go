@@ -36,9 +36,10 @@ func setupFlags() {
 	flag.IntVar(&conf.NvmeTimeoutSec, "nvme-timeout", 30, "Deadline (seconds) applied to `nvme connect` / `nvme disconnect` shell-outs and to the post-disconnect waits for the kernel subsystem entry and /dev/disk/by-id symlink to clear; if exceeded, the op fails and volume_clean is skipped")
 	flag.IntVar(&conf.MkfsFsckTimeoutSec, "mkfs-fsck-timeout", 120, "Per-command timeout (seconds) for SafeFormatAndMount shell-outs (fsck/mkfs/mount); processes that exceed this are killed to prevent NodePublishVolume from hanging on a stuck NVMe-oF device")
 	flag.IntVar(&conf.VolumeCleanPollIntervalSec, "volume-clean-poll-interval", 2, "Interval (seconds) between volume_get polls while waiting for READY after volume_clean")
-	flag.IntVar(&conf.VolumeCleanReadyTimeoutSec, "volume-clean-ready-timeout", 60, "Total budget (seconds) to wait for volume_get to report READY after volume_clean")
+	flag.IntVar(&conf.VolumeCleanReadyTimeoutSec, "volume-clean-ready-timeout", 330, "Total budget (seconds) to wait for volume_get to report READY after volume_clean")
 	flag.BoolVar(&conf.VolumeCleanEnabled, "volume-clean-enabled", false, "When true, NodeUnpublishVolume calls the storage.volume_clean RPC after unmount and waits for READY before returning")
-	flag.IntVar(&conf.VolumeCleanFstrimTimeoutSec, "volume-clean-fstrim-timeout", 30, "fstrim timeout (seconds) forwarded to storage.volume_clean; the backend applies it to the fstrim run on the SPDK node")
+	flag.IntVar(&conf.VolumeCleanFstrimTimeoutSec, "volume-clean-fstrim-timeout", 300, "fstrim timeout (seconds) forwarded to storage.volume_clean; the backend applies it to the fstrim run on the SPDK node")
+	flag.IntVar(&conf.MountRepairMaxRetries, "mount-repair-max-retries", 1, "On an unrecoverable-fsck mount failure, attempt this many backend volume_clean repairs (disconnect, clean+wait READY, reconnect, retry) before failing; 0 disables")
 
 	klog.InitFlags(nil)
 	if err := flag.Set("logtostderr", "true"); err != nil {

@@ -117,12 +117,8 @@ func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 	}
 
 	mntFlags := vc.GetMount().GetMountFlags()
-	klog.Infof("NodePublishVolume: formatting+mounting, volumeID: %s device: %s -> %s flags: %v", volumeID, devicePath, targetPath, mntFlags)
-	sfMounter := mount.SafeFormatAndMount{
-		Interface: ns.mounter,
-		Exec:      util.NewTimeoutExec(exec.New(), time.Duration(ns.conf.MkfsFsckTimeoutSec)*time.Second),
-	}
-	if err = sfMounter.FormatAndMount(devicePath, targetPath, "ext4", mntFlags); err != nil {
+	devicePath, err = ns.formatMountWithRepair(initiator, volumeID, devicePath, targetPath, mntFlags)
+	if err != nil {
 		klog.Errorf("failed to format and mount device, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -232,6 +228,91 @@ func (ns *nodeServer) cleanVolume(volumeID string) error {
 		return fmt.Errorf("init mgx client: %w", err)
 	}
 	klog.Infof("NodeUnpublishVolume: calling volume_clean, volumeID: %s", volumeID)
+	if err := mgxClient.CleanVolume(volumeID, ns.conf.VolumeCleanFstrimTimeoutSec); err != nil {
+		return fmt.Errorf("volume_clean: %w", err)
+	}
+	return waitVolumeReady(volumeID, mgxClient, ns.conf)
+}
+
+// formatMountWithRepair formats+mounts the device, and on an unrecoverable-fsck
+// failure runs a bounded volume_clean repair loop: unmount (if mounted, to avoid
+// an unclean NVMe detach), disconnect (the backend gates clean on running
+// controllers), storage.volume_clean + wait READY, reconnect, retry. A clean
+// reconciles the backend's cache to the backing store, clearing the rare
+// cache/destage inconsistency. Returns the device path in effect after any
+// reconnect so the caller stashes the correct backing device. Any non-fsck
+// error, or an exhausted repair budget, is returned as-is on the first failure.
+func (ns *nodeServer) formatMountWithRepair(initiator util.MGXCsiInitiator, volumeID, devicePath, targetPath string, mntFlags []string) (string, error) {
+	sfMounter := mount.SafeFormatAndMount{
+		Interface: ns.mounter,
+		Exec:      util.NewTimeoutExec(exec.New(), time.Duration(ns.conf.MkfsFsckTimeoutSec)*time.Second),
+	}
+
+	repairsLeft := ns.conf.MountRepairMaxRetries
+	for {
+		klog.Infof("NodePublishVolume: formatting+mounting, volumeID: %s device: %s -> %s flags: %v", volumeID, devicePath, targetPath, mntFlags)
+		err := sfMounter.FormatAndMount(devicePath, targetPath, "ext4", mntFlags)
+		if err == nil {
+			return devicePath, nil
+		}
+		if repairsLeft <= 0 || !isFsckUncorrectable(err) {
+			return devicePath, err
+		}
+		repairsLeft--
+		klog.Errorf("NodePublishVolume: unrecoverable filesystem inconsistency on volumeID: %s — attempting volume_clean repair (%d left): %v", volumeID, repairsLeft, err)
+
+		// Defensive: the fsck failure happens before the mount, so the target is
+		// normally not mounted here — but never disconnect NVMe with a live mount
+		// (unclean detach). Unmount only (keep the directory so the retry can
+		// re-mount into it); do not deleteMountPoint, which would remove it.
+		if isMnt, mErr := ns.mounter.IsMountPoint(targetPath); mErr == nil && isMnt {
+			if uErr := ns.mounter.Unmount(targetPath); uErr != nil {
+				return devicePath, fmt.Errorf("unmount before repair: %w", uErr)
+			}
+			klog.Infof("NodePublishVolume: unmounted before repair, volumeID: %s", volumeID)
+		}
+
+		if derr := initiator.Disconnect(); derr != nil {
+			return devicePath, fmt.Errorf("disconnect before repair: %w", derr)
+		}
+		if rerr := ns.repairVolumeClean(volumeID); rerr != nil {
+			return devicePath, fmt.Errorf("volume_clean repair: %w", rerr)
+		}
+		newDevicePath, cerr := initiator.Connect(ns.conf.NrIoQueues, ns.conf.QueueSize)
+		if cerr != nil {
+			return devicePath, fmt.Errorf("reconnect after repair: %w", cerr)
+		}
+		devicePath = newDevicePath
+		klog.Infof("NodePublishVolume: reconnected after repair, volumeID: %s devicePath: %s", volumeID, devicePath)
+	}
+}
+
+// isFsckUncorrectable reports whether a SafeFormatAndMount error is the
+// unrecoverable-fsck signature — filesystem metadata inconsistency that fsck
+// -a/-p cannot repair — as opposed to a transient or unrelated mount failure.
+// Matched on the e2fsck wording surfaced through k8s.io/mount-utils.
+func isFsckUncorrectable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unexpected inconsistency") ||
+		strings.Contains(msg, "run fsck manually") ||
+		(strings.Contains(msg, "fsck") && strings.Contains(msg, "could not correct"))
+}
+
+// repairVolumeClean runs storage.volume_clean and waits for READY, regardless of
+// VolumeCleanEnabled. Used as a targeted repair when NodePublishVolume hits an
+// unrecoverable filesystem inconsistency (rare backend cache/destage bug): a
+// full clean forces the backend to reconcile the volume's cache to the backing
+// store, which clears the bad blocks. Distinct from cleanVolume, which is the
+// routine unpublish-time clean gated by VolumeCleanEnabled.
+func (ns *nodeServer) repairVolumeClean(volumeID string) error {
+	mgxClient, err := util.NewMGXClient()
+	if err != nil {
+		return fmt.Errorf("init mgx client: %w", err)
+	}
+	klog.Warningf("NodePublishVolume: running volume_clean repair, volumeID: %s", volumeID)
 	if err := mgxClient.CleanVolume(volumeID, ns.conf.VolumeCleanFstrimTimeoutSec); err != nil {
 		return fmt.Errorf("volume_clean: %w", err)
 	}

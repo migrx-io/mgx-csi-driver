@@ -152,8 +152,14 @@ node:
   # always lets the backend gate the clean on running controllers.
   volumeCleanEnabled: false
   volumeCleanPollInterval: 2
-  volumeCleanReadyTimeout: 60
-  volumeCleanFstrimTimeout: 30
+  volumeCleanReadyTimeout: 330
+  volumeCleanFstrimTimeout: 300
+  # mountRepairMaxRetries: when >0, an unrecoverable-fsck mount failure in
+  # NodePublishVolume is treated as a rare backend cache/destage inconsistency
+  # and repaired in-line — unmount if needed, disconnect, storage.volume_clean +
+  # wait READY, reconnect, retry the mount — up to this many times before
+  # failing. 0 disables. Uses the volumeClean* poll/timeout/fstrim settings.
+  mountRepairMaxRetries: 1
 
 # The single snapshot controller deployment works for all CSI drivers
 # in a cluster. So enable it only if you kubernetes cluster does not
