@@ -2,6 +2,7 @@ package mgx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -88,6 +89,14 @@ func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
+	// Advance any in-progress restart repair (a prior attempt that stopped the
+	// volume after an unrecoverable fsck). This returns Aborted while the volume
+	// is stopped/transitioning so kubelet retries; it is a no-op on the common
+	// path where the volume is already READY.
+	if rerr := reconcileRestartRepair(volumeID); rerr != nil {
+		return nil, rerr
+	}
+
 	// Tear down anything left over from a previous Publish attempt on this
 	// target (e.g. kubelet retried after our gRPC timed out). Each step is
 	// idempotent — on the common first-Publish case all three are no-ops.
@@ -117,8 +126,7 @@ func (ns *nodeServer) NodePublishVolume(_ context.Context, req *csi.NodePublishV
 	}
 
 	mntFlags := vc.GetMount().GetMountFlags()
-	devicePath, err = ns.formatMountWithRepair(initiator, volumeID, devicePath, targetPath, mntFlags)
-	if err != nil {
+	if err = ns.formatMount(initiator, volumeID, devicePath, targetPath, mntFlags); err != nil {
 		klog.Errorf("failed to format and mount device, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -234,57 +242,47 @@ func (ns *nodeServer) cleanVolume(volumeID string) error {
 	return waitVolumeReady(volumeID, mgxClient, ns.conf)
 }
 
-// formatMountWithRepair formats+mounts the device, and on an unrecoverable-fsck
-// failure runs a bounded volume_clean repair loop: unmount (if mounted, to avoid
-// an unclean NVMe detach), disconnect (the backend gates clean on running
-// controllers), storage.volume_clean + wait READY, reconnect, retry. A clean
-// reconciles the backend's cache to the backing store, clearing the rare
-// cache/destage inconsistency. Returns the device path in effect after any
-// reconnect so the caller stashes the correct backing device. Any non-fsck
-// error, or an exhausted repair budget, is returned as-is on the first failure.
-func (ns *nodeServer) formatMountWithRepair(initiator util.MGXCsiInitiator, volumeID, devicePath, targetPath string, mntFlags []string) (string, error) {
+// formatMount formats+mounts the device. On an unrecoverable-fsck failure (a
+// rare backend cache/destage inconsistency) it triggers a restart repair instead
+// of failing hard: unmount (if mounted, to avoid an unclean NVMe detach),
+// disconnect, then stop the volume, and return an error so kubelet retries
+// NodePublishVolume. There is no in-line wait — each Publish retry acts as one
+// reconcile step: reconcileRestartRepair (run at the top of NodePublishVolume)
+// starts the stopped volume back up, and once it is READY again the retried
+// mount reads the reconciled cache and succeeds.
+func (ns *nodeServer) formatMount(initiator util.MGXCsiInitiator, volumeID, devicePath, targetPath string, mntFlags []string) error {
 	sfMounter := mount.SafeFormatAndMount{
 		Interface: ns.mounter,
 		Exec:      util.NewTimeoutExec(exec.New(), time.Duration(ns.conf.MkfsFsckTimeoutSec)*time.Second),
 	}
 
-	repairsLeft := ns.conf.MountRepairMaxRetries
-	for {
-		klog.Infof("NodePublishVolume: formatting+mounting, volumeID: %s device: %s -> %s flags: %v", volumeID, devicePath, targetPath, mntFlags)
-		err := sfMounter.FormatAndMount(devicePath, targetPath, "ext4", mntFlags)
-		if err == nil {
-			return devicePath, nil
-		}
-		if repairsLeft <= 0 || !isFsckUncorrectable(err) {
-			return devicePath, err
-		}
-		repairsLeft--
-		klog.Errorf("NodePublishVolume: unrecoverable filesystem inconsistency on volumeID: %s — attempting volume_clean repair (%d left): %v", volumeID, repairsLeft, err)
-
-		// Defensive: the fsck failure happens before the mount, so the target is
-		// normally not mounted here — but never disconnect NVMe with a live mount
-		// (unclean detach). Unmount only (keep the directory so the retry can
-		// re-mount into it); do not deleteMountPoint, which would remove it.
-		if isMnt, mErr := ns.mounter.IsMountPoint(targetPath); mErr == nil && isMnt {
-			if uErr := ns.mounter.Unmount(targetPath); uErr != nil {
-				return devicePath, fmt.Errorf("unmount before repair: %w", uErr)
-			}
-			klog.Infof("NodePublishVolume: unmounted before repair, volumeID: %s", volumeID)
-		}
-
-		if derr := initiator.Disconnect(); derr != nil {
-			return devicePath, fmt.Errorf("disconnect before repair: %w", derr)
-		}
-		if rerr := ns.repairVolumeClean(volumeID); rerr != nil {
-			return devicePath, fmt.Errorf("volume_clean repair: %w", rerr)
-		}
-		newDevicePath, cerr := initiator.Connect(ns.conf.NrIoQueues, ns.conf.QueueSize)
-		if cerr != nil {
-			return devicePath, fmt.Errorf("reconnect after repair: %w", cerr)
-		}
-		devicePath = newDevicePath
-		klog.Infof("NodePublishVolume: reconnected after repair, volumeID: %s devicePath: %s", volumeID, devicePath)
+	klog.Infof("NodePublishVolume: formatting+mounting, volumeID: %s device: %s -> %s flags: %v", volumeID, devicePath, targetPath, mntFlags)
+	err := sfMounter.FormatAndMount(devicePath, targetPath, "ext4", mntFlags)
+	if err == nil {
+		return nil
 	}
+	if !isFsckUncorrectable(err) {
+		return err
+	}
+	klog.Errorf("NodePublishVolume: unrecoverable filesystem inconsistency on volumeID: %s — triggering restart repair: %v", volumeID, err)
+
+	// Defensive: the fsck failure happens before the mount, so the target is
+	// normally not mounted here — but never disconnect NVMe with a live mount
+	// (unclean detach). Unmount only (keep the directory so the retry can
+	// re-mount into it); do not deleteMountPoint, which would remove it.
+	if isMnt, mErr := ns.mounter.IsMountPoint(targetPath); mErr == nil && isMnt {
+		if uErr := ns.mounter.Unmount(targetPath); uErr != nil {
+			return fmt.Errorf("unmount before repair: %w", uErr)
+		}
+		klog.Infof("NodePublishVolume: unmounted before repair, volumeID: %s", volumeID)
+	}
+	if derr := initiator.Disconnect(); derr != nil {
+		return fmt.Errorf("disconnect before repair: %w", derr)
+	}
+	if serr := stopVolumeForRepair(volumeID); serr != nil {
+		return serr
+	}
+	return fmt.Errorf("restart repair: stopped volume %s after unrecoverable fsck; retry after it restarts", volumeID)
 }
 
 // isFsckUncorrectable reports whether a SafeFormatAndMount error is the
@@ -301,22 +299,59 @@ func isFsckUncorrectable(err error) bool {
 		(strings.Contains(msg, "fsck") && strings.Contains(msg, "could not correct"))
 }
 
-// repairVolumeClean runs storage.volume_clean and waits for READY, regardless of
-// VolumeCleanEnabled. Used as a targeted repair when NodePublishVolume hits an
-// unrecoverable filesystem inconsistency (rare backend cache/destage bug): a
-// full clean forces the backend to reconcile the volume's cache to the backing
-// store, which clears the bad blocks. Distinct from cleanVolume, which is the
-// routine unpublish-time clean gated by VolumeCleanEnabled.
-func (ns *nodeServer) repairVolumeClean(volumeID string) error {
+// reconcileRestartRepair advances an in-progress restart repair by one step,
+// then returns. It is called at the top of NodePublishVolume so each Publish
+// retry acts as one reconcile tick (mirroring the controller's idle/unidle
+// stop/start), rather than blocking in-line:
+//   - READY (or volume gone / repair disabled): nothing to do, proceed.
+//   - STOPPED: a prior attempt stopped the volume for repair — start it and
+//     return Aborted so kubelet retries once it comes back up.
+//   - any transitional status: return Aborted and wait for the next retry.
+//
+// Starting a STOPPED volume here is safe because ControllerPublishVolume gates
+// on READY, so a volume seen STOPPED at Publish time was stopped by our repair.
+func reconcileRestartRepair(volumeID string) error {
+	mgxClient, err := util.NewMGXClient()
+	if err != nil {
+		return status.Error(codes.Internal, err.Error())
+	}
+	vol, err := mgxClient.GetVolume(volumeID)
+	if err != nil {
+		if errors.Is(err, util.ErrNotFound) {
+			return nil
+		}
+		return status.Error(codes.Internal, err.Error())
+	}
+	switch vol.Status {
+	case VolumeStatusReady:
+		return nil
+	case VolumeStatusStopped:
+		klog.Warningf("NodePublishVolume: restart repair — volume STOPPED, starting, volumeID: %s", volumeID)
+		if err := mgxClient.StartVolume(volumeID); err != nil {
+			return status.Error(codes.Internal, err.Error())
+		}
+		return status.Errorf(codes.Aborted, "restart repair: started volume %s, retry after it reaches READY", volumeID)
+	default:
+		return status.Errorf(codes.Aborted, "restart repair: volume %s not READY (%s), retry", volumeID, vol.Status)
+	}
+}
+
+// stopVolumeForRepair stops the volume as the first reconcile step of a restart
+// repair (see formatMount). It is a no-op if the volume is already STOPPED so a
+// retried Publish that re-hits the fsck does not stop it twice.
+func stopVolumeForRepair(volumeID string) error {
 	mgxClient, err := util.NewMGXClient()
 	if err != nil {
 		return fmt.Errorf("init mgx client: %w", err)
 	}
-	klog.Warningf("NodePublishVolume: running volume_clean repair, volumeID: %s", volumeID)
-	if err := mgxClient.CleanVolume(volumeID, ns.conf.VolumeCleanFstrimTimeoutSec); err != nil {
-		return fmt.Errorf("volume_clean: %w", err)
+	if vol, gerr := mgxClient.GetVolume(volumeID); gerr == nil && vol.Status == VolumeStatusStopped {
+		return nil
 	}
-	return waitVolumeReady(volumeID, mgxClient, ns.conf)
+	klog.Warningf("NodePublishVolume: restart repair — stopping volume, volumeID: %s", volumeID)
+	if err := mgxClient.StopVolume(volumeID); err != nil {
+		return fmt.Errorf("stop volume: %w", err)
+	}
+	return nil
 }
 
 // otherPodMounts lists kubelet pod target paths (other than targetPath)

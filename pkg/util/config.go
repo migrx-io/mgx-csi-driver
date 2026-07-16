@@ -43,11 +43,6 @@ type Config struct {
 	// applies it to the fstrim run on the SPDK node. force is not exposed —
 	// the driver always lets the backend gate on running controllers.
 	VolumeCleanFstrimTimeoutSec int
-	// When >0, NodePublishVolume treats an unrecoverable-fsck mount failure as a
-	// (rare) backend cache/destage inconsistency and attempts up to this many
-	// volume_clean repairs — disconnect, storage.volume_clean + wait READY,
-	// reconnect, retry the mount — before giving up. 0 disables the behavior.
-	MountRepairMaxRetries int
 
 	IsControllerServer bool
 	IsNodeServer       bool

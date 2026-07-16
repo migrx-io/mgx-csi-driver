@@ -300,7 +300,6 @@ behavior:
 | `node.volumeCleanPollInterval` | `2` | Gap between `volume_get` probes while waiting for clean (s). |
 | `node.volumeCleanReadyTimeout` | `330` | Total budget waiting for `READY` after clean (s). |
 | `node.volumeCleanFstrimTimeout` | `300` | `fstrim` timeout forwarded to `volume_clean` (s). |
-| `node.mountRepairMaxRetries` | `1` | On an unrecoverable-fsck mount failure, retry this many `volume_clean` repairs (unmount, disconnect, clean+wait `READY`, reconnect, remount) before failing. `0` disables. |
 
 ## Operations
 

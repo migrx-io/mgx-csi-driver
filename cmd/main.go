@@ -39,7 +39,6 @@ func setupFlags() {
 	flag.IntVar(&conf.VolumeCleanReadyTimeoutSec, "volume-clean-ready-timeout", 330, "Total budget (seconds) to wait for volume_get to report READY after volume_clean")
 	flag.BoolVar(&conf.VolumeCleanEnabled, "volume-clean-enabled", false, "When true, NodeUnpublishVolume calls the storage.volume_clean RPC after unmount and waits for READY before returning")
 	flag.IntVar(&conf.VolumeCleanFstrimTimeoutSec, "volume-clean-fstrim-timeout", 300, "fstrim timeout (seconds) forwarded to storage.volume_clean; the backend applies it to the fstrim run on the SPDK node")
-	flag.IntVar(&conf.MountRepairMaxRetries, "mount-repair-max-retries", 1, "On an unrecoverable-fsck mount failure, attempt this many backend volume_clean repairs (disconnect, clean+wait READY, reconnect, retry) before failing; 0 disables")
 
 	klog.InitFlags(nil)
 	if err := flag.Set("logtostderr", "true"); err != nil {
