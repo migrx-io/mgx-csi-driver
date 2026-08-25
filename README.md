@@ -1,12 +1,14 @@
-# MGX CSI Driver for Kubernetes
+# backedblock.io CSI driver for Kubernetes
 
 A [Container Storage Interface (CSI)](https://github.com/container-storage-interface/spec)
-driver that provisions block storage from an MGX storage cluster and exposes it
-to Kubernetes workloads over **NVMe-oF**. Volumes are thin-provisioned,
+driver that provisions block storage from a
+[backedblock.io](https://backedblock.io) storage cluster and exposes it to
+Kubernetes workloads over **NVMe-oF**. Volumes are thin-provisioned,
 cache-accelerated, and support online expansion, QoS limits, encryption,
 compression, and S3-backed snapshots.
 
-Driver name (CSI provisioner): **`csi.migrx.io`**.
+Driver name (CSI provisioner): **`csi.migrx.io`**. Full documentation:
+[backedblock.io/docs](https://backedblock.io/docs).
 
 ---
 
@@ -37,17 +39,17 @@ The driver runs two components, both deployed by the Helm chart:
 
 | Component | Workload | Role |
 | --- | --- | --- |
-| **Controller** | `StatefulSet` (`mgxcsi-controller`) | Talks to the MGX management API (MGM) to create/delete/expand volumes and snapshots. Bundles the upstream `csi-provisioner`, `csi-attacher`, `csi-resizer`, and `csi-snapshotter` sidecars. Runs a background reconciler that drives volumes to the `READY` state. |
+| **Controller** | `StatefulSet` (`mgxcsi-controller`) | Talks to the storage cluster's management API to create/delete/expand volumes and snapshots. Bundles the upstream `csi-provisioner`, `csi-attacher`, `csi-resizer`, and `csi-snapshotter` sidecars. Runs a background reconciler that drives volumes to the `READY` state. |
 | **Node** | `DaemonSet` (`mgxcsi-node`) | Runs on every node. Connects/disconnects NVMe-oF targets, formats and mounts the device into the pod. Bundles `csi-node-driver-registrar`. |
 
-Data path: a workload's PVC → controller asks MGM to carve a volume out of the
-storage pool → node connects the NVMe-oF target exposed by the MGX/SPDK backend
-→ kubelet mounts the filesystem into the pod.
+Data path: a workload's PVC → controller asks the management API to carve a
+volume out of the storage pool → node connects the NVMe-oF target exposed by the
+storage cluster's SPDK backend → kubelet mounts the filesystem into the pod.
 
 ```
-  ┌──────────────┐   CSI gRPC    ┌────────────────────┐   MGM API    ┌──────────────┐
-  │  kube-api /  │──────────────▶│  mgxcsi-controller │─────────────▶│  MGX cluster │
-  │  sidecars    │               │  (provision/snap)  │   :8082      │  (SPDK)      │
+  ┌──────────────┐   CSI gRPC    ┌────────────────────┐  management  ┌──────────────┐
+  │  kube-api /  │──────────────▶│  mgxcsi-controller │─────────────▶│   storage    │
+  │  sidecars    │               │  (provision/snap)  │  API, :8082  │   cluster    │
   └──────────────┘               └────────────────────┘              └──────┬───────┘
                                                                             │ NVMe-oF
   ┌──────────────┐   CSI gRPC    ┌────────────────────┐                     │
@@ -73,8 +75,10 @@ does not support multi-node read-write.
 
 ## Prerequisites
 
-- A running **MGX storage cluster** reachable from the Kubernetes nodes, with the
-  MGM management API exposed (default port `8082`) and API credentials.
+- A running **backedblock.io storage cluster** reachable from the Kubernetes
+  nodes, with the management API exposed (default port `8082`) and API
+  credentials. See
+  [Install the storage cluster](https://backedblock.io/docs/storage-cluster).
 - Worker nodes with the **`nvme-cli`** stack and the kernel NVMe-oF/TCP modules
   available (the node image already ships `nvme-cli`, `e2fsprogs`, `xfsprogs`,
   `util-linux`).
@@ -217,13 +221,13 @@ on copy completion) and the PVC binds once the volume reaches `READY`.
 
 ### Helm values
 
-Connection to the MGX cluster is supplied through `csiSecret.clusterConfig`,
+Connection to the storage cluster is supplied through `csiSecret.clusterConfig`,
 which is rendered into a `mgxcsi-secret` Secret:
 
 | Value | Default | Description |
 | --- | --- | --- |
-| `csiSecret.clusterConfig.protocol` | `http` | MGM API protocol. |
-| `csiSecret.clusterConfig.nodes` | `[localhost:8082]` | MGM API endpoints (`host:port`). |
+| `csiSecret.clusterConfig.protocol` | `http` | Management API protocol. |
+| `csiSecret.clusterConfig.nodes` | `[localhost:8082]` | Management API endpoints (`host:port`). |
 | `csiSecret.clusterConfig.cluster` | `main` | Target cluster name. |
 | `csiSecret.clusterConfig.ns` | `main` | Target namespace within the cluster. |
 | `csiSecret.clusterConfig.username` / `password` | `""` | API credentials. |
@@ -275,7 +279,7 @@ The StorageClass is created with `volumeBindingMode: Immediate` and
 | --- | --- | --- | --- |
 | `config` | `config` | _(server default)_ | Snapshot plugin config profile name. |
 | `incremental` | `incremental` | `yes` | `yes` keeps full + incremental history (restorable PITs); `no` keeps a single rolling latest-only backup. |
-| `storageClass` | `storage_class` | _(bucket default)_ | Destination S3 storage class (`STANDARD`, `STANDARD_IA`, `GLACIER`, `DEEP_ARCHIVE`, …). |
+| `storageClass` | `storage_class` | _(bucket default)_ | Destination S3 storage class. Use one whose objects can be read back directly: `STANDARD`, `STANDARD_IA`, `ONEZONE_IA`, `INTELLIGENT_TIERING`, `GLACIER_IR`. `GLACIER` and `DEEP_ARCHIVE` need an explicit S3 restore first, so a snapshot sent there is not restorable. |
 | `labels` | `labels` | _(unset)_ | Per-snapshot labels. |
 | `deletionPolicy` | — | `Delete` | `Delete` or `Retain` — fate of the backup when the VolumeSnapshot is removed. |
 | `isDefault` | — | `false` | Mark as the cluster default VolumeSnapshotClass. |
@@ -343,7 +347,7 @@ make e2e-test         # run the e2e suite
 make kind-delete
 ```
 
-Override the registry/tag or MGM endpoint as needed:
+Override the registry/tag or management API endpoint as needed:
 
 ```sh
 make docker-build CSI_IMAGE_REGISTRY=myrepo CSI_IMAGE_TAG=dev

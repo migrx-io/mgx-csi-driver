@@ -95,7 +95,10 @@ volumeSnapshotClass:
 
   # Destination S3 storage class for backup objects. Overrides the config
   # profile's storage_class. Empty = use the bucket default (the parameter is
-  # not sent). Typical values: STANDARD, STANDARD_IA, GLACIER, DEEP_ARCHIVE.
+  # not sent). Use a class whose objects can be read back directly: STANDARD,
+  # STANDARD_IA, ONEZONE_IA, INTELLIGENT_TIERING, GLACIER_IR. GLACIER and
+  # DEEP_ARCHIVE need an explicit S3 restore first, so a snapshot sent there is
+  # not restorable.
   storageClass: ""
 
   # Optional per-snapshot overrides forwarded to the snapshot plugin.
