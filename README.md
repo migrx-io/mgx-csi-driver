@@ -164,7 +164,8 @@ Mount it in a pod like any other PVC:
 
 ```yaml
     volumeMounts:
-      - { name: data, mountPath: /data }
+      - name: data
+        mountPath: /data
   volumes:
     - name: data
       persistentVolumeClaim:
