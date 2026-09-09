@@ -14,6 +14,19 @@ type Config struct {
 	NrIoQueues int
 	QueueSize  int
 
+	// Block-layer queue settings applied to each device after `nvme connect`.
+	// Defaults match what udev gives a local NVMe/EBS device, so an mgx volume
+	// and a gp3 volume present the same queue to the filesystem above them.
+	//
+	// IOScheduler: "" leaves udev's choice alone. `none` is what makes the
+	// target's per-operation QoS bind on sequential I/O - see tuneBlockQueue.
+	//
+	// MaxSectorsKB: 0 leaves the kernel default. Values above the device's
+	// max_hw_sectors_kb are clamped, since the transport's advertised MDTS is
+	// a hard ceiling (nvme-tcp reports 128 KiB, where EBS reports 256).
+	IOScheduler  string
+	MaxSectorsKB int
+
 	// NVMe-oF connection timeouts (seconds), passed to `nvme connect`.
 	ReconnectDelay int
 	CtrlLossTmo    int

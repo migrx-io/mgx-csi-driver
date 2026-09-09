@@ -293,8 +293,10 @@ behavior:
 
 | Value | Default | Description |
 | --- | --- | --- |
-| `node.nrIoQueues` | `2` | NVMe-oF I/O queues. |
-| `node.queueSize` | `16` | NVMe-oF queue depth. |
+| `node.nrIoQueues` | `1` | NVMe-oF I/O queues. `1` measured faster than `2` on nvme-tcp (halved latency, doubled sequential throughput). |
+| `node.queueSize` | `32` | NVMe-oF queue depth per I/O queue. `nrIoQueues * queueSize` is the total tags in flight; throughput is bounded by tags/latency. |
+| `node.ioScheduler` | `none` | Block-layer scheduler for each attached device. `none` matches local NVMe/EBS; `mq-deadline` merges small sequential I/O so the target's per-operation QoS stops binding. `""` leaves udev's choice. |
+| `node.maxSectorsKB` | `256` | Largest single block-layer request (KiB), matching EBS gp3. Clamped to the device's `max_hw_sectors_kb` (the target's advertised MDTS), so nvme-tcp currently lands at 128. `0` leaves the kernel default. |
 | `node.fastIoFailTmo` | `0` | Seconds to queue I/O on a lost controller before failing fast (`0` = immediate). |
 | `node.ctrlLossTmo` | `10` | Seconds to retry reconnect before removing the controller (≥ `fastIoFailTmo`). |
 | `node.reconnectDelay` | `2` | Pause between reconnect attempts (s). |

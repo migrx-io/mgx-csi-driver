@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"k8s.io/klog"
@@ -36,6 +38,8 @@ type initiatorNVMf struct {
 	fastIOFailTmo  int
 	keepAliveTmo   int
 	timeout        int
+	ioScheduler    string
+	maxSectorsKB   int
 }
 
 func NewMGXClient() (*NodeNVMf, error) {
@@ -75,6 +79,8 @@ func NewMGXCsiInitiator(volumeContext map[string]string, conf *Config) (MGXCsiIn
 		fastIOFailTmo:  conf.FastIOFailTmo,
 		keepAliveTmo:   conf.KeepAliveTmo,
 		timeout:        conf.NvmeTimeoutSec,
+		ioScheduler:    conf.IOScheduler,
+		maxSectorsKB:   conf.MaxSectorsKB,
 	}, nil
 }
 
@@ -142,7 +148,123 @@ func (nvmf *initiatorNVMf) Connect(nrIoQueues, queueSize int) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
+	// Applied on every Connect, not just when we ran `nvme connect`: the block
+	// device is recreated on reattach and comes back with udev's default.
+	if serr := tuneBlockQueue(devicePath, nvmf.ioScheduler, nvmf.maxSectorsKB); serr != nil {
+		// Not fatal - the volume is fully usable, only QoS accounting and
+		// request sizing are left at the kernel's defaults.
+		klog.Warningf("could not tune block queue for %s: %v", devicePath, serr)
+	}
+
 	return devicePath, nil
+}
+
+// tuneBlockQueue applies block-layer queue settings to a freshly attached
+// device so that an mgx volume presents the same queue as a local NVMe/EBS one.
+//
+// scheduler: udev assigns `mq-deadline` to nvme-tcp devices on some distros
+// (Amazon Linux 2023 among them), while local NVMe and EBS get `none`.
+// mq-deadline merges adjacent requests up to max_sectors_kb, so a sequential 4K
+// writer reaches the target as ~128 KiB I/Os. The target's bdev QoS counts
+// operations, so qos_rw_ios_per_sec sees ~1/32 of the client's IOPS and never
+// engages - measured 27,000 IOPS against a 3,000 IOPS cap, where random I/O
+// (unmergeable) capped correctly at ~2,750. `none` restores parity with EBS.
+//
+// maxSectorsKB: the largest single request the block layer will issue. The
+// kernel rejects any value above the device's max_hw_sectors_kb, so the request
+// is clamped instead of failing. That ceiling is the MDTS the target
+// advertises, and nvme-tcp reports 128 KiB where EBS reports 256 - so asking
+// for EBS parity here is satisfied only as far as the transport allows.
+//
+// devicePath is a /dev/disk/by-id symlink, so it is resolved to the kernel name
+// first. Writing a value that is already set is a kernel no-op, which makes
+// this idempotent across reconnects. Zero/empty settings are left alone, and
+// both attributes are attempted even if one fails.
+func tuneBlockQueue(devicePath, scheduler string, maxSectorsKB int) error {
+	if scheduler == "" && maxSectorsKB <= 0 {
+		return nil
+	}
+
+	resolved, err := filepath.EvalSymlinks(devicePath)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", devicePath, err)
+	}
+
+	// Base() of a resolved device node cannot contain a separator, so nothing
+	// built from it can escape /sys/block.
+	dev := filepath.Base(resolved) // /dev/nvme1n1 -> nvme1n1
+
+	var errs []error
+
+	if scheduler != "" {
+		if werr := writeQueueAttr(dev, "scheduler", scheduler); werr != nil {
+			errs = append(errs, werr)
+		} else {
+			klog.Infof("%s: scheduler set to %s", dev, scheduler)
+		}
+	}
+
+	if maxSectorsKB > 0 {
+		want := maxSectorsKB
+
+		hw, herr := readQueueAttrInt(dev, "max_hw_sectors_kb")
+		switch {
+		case herr != nil:
+			errs = append(errs, herr)
+
+			want = 0
+		case want > hw:
+			klog.Infof("%s: max_sectors_kb %d above hardware limit %d, clamping",
+				dev, want, hw)
+
+			want = hw
+		}
+
+		if want > 0 {
+			if werr := writeQueueAttr(dev, "max_sectors_kb", strconv.Itoa(want)); werr != nil {
+				errs = append(errs, werr)
+			} else {
+				klog.Infof("%s: max_sectors_kb set to %d", dev, want)
+			}
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+// queueAttrPath builds /sys/block/<dev>/queue/<attr>. Sprintf rather than
+// filepath.Join because the sysfs layout is fixed, not composed from path
+// elements; dev comes from filepath.Base so it cannot contain a separator.
+func queueAttrPath(dev, attr string) string {
+	return fmt.Sprintf("/sys/block/%s/queue/%s", dev, attr)
+}
+
+func writeQueueAttr(dev, attr, value string) error {
+	path := queueAttrPath(dev, attr)
+
+	// Mode is inert: sysfs attributes already exist and ignore it.
+	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+
+	return nil
+}
+
+func readQueueAttrInt(dev, attr string) (int, error) {
+	path := queueAttrPath(dev, attr)
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	n, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", path, err)
+	}
+
+	return n, nil
 }
 
 func (nvmf *initiatorNVMf) Disconnect() error {

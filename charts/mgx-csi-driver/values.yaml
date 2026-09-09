@@ -119,8 +119,31 @@ node:
   nodeSelector: {}
   tolerations:
     - operator: "Exists"
-  nrIoQueues: 2
-  queueSize: 16
+  # nrIoQueues * queueSize is the total tags in flight to the target, and
+  # throughput is bounded by tags/latency whatever the QoS limits allow.
+  # 1 queue measured markedly faster than 2 on nvme-tcp -- halved latency
+  # and doubled sequential throughput at the same depth -- which points at
+  # target-side poll-group contention on a single bdev rather than at the
+  # usual multi-queue scaling. Raise queueSize before nrIoQueues.
+  nrIoQueues: 1
+  queueSize: 32
+  # Block-layer queue settings applied to each device after `nvme connect`.
+  # Defaults are what udev gives a local NVMe/EBS gp3 device, so an mgx
+  # volume presents the same queue to the filesystem above it.
+  #
+  # ioScheduler: udev hands nvme-tcp devices `mq-deadline` on some distros,
+  #   which merges adjacent requests up to maxSectorsKB. The target's bdev
+  #   QoS counts operations, so a sequential 4K writer merged 32:1 escapes
+  #   qos_rw_ios_per_sec entirely (measured 27,000 IOPS against a 3,000 IOPS
+  #   cap, while random I/O capped correctly). `none` restores EBS parity.
+  #   Empty string leaves udev's choice alone.
+  # maxSectorsKB: largest single request the block layer may issue. Clamped
+  #   to the device's max_hw_sectors_kb, which is the MDTS the target
+  #   advertises -- nvme-tcp reports 128 KiB where EBS reports 256, so this
+  #   currently lands at 128 and will follow if the target raises its MDTS.
+  #   0 leaves the kernel default.
+  ioScheduler: "none"
+  maxSectorsKB: 256
   # NVMe-oF connection timeouts (seconds) passed to `nvme connect`.
   # fastIoFailTmo: how long the host queues I/O on a lost controller before
   #   failing fast with EIO. 0 = fail immediately on any controller fault.
