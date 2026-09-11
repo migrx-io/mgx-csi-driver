@@ -24,8 +24,15 @@ type Config struct {
 	// MaxSectorsKB: 0 leaves the kernel default. Values above the device's
 	// max_hw_sectors_kb are clamped, since the transport's advertised MDTS is
 	// a hard ceiling (nvme-tcp reports 128 KiB, where EBS reports 256).
+	//
+	// NrRequests: 0 leaves the kernel default. Under IOScheduler `none` the
+	// default is already the controller's tag depth and cannot be exceeded,
+	// so this only ever lowers it there - NrIoQueues/QueueSize are the knobs
+	// that raise it. Under a real scheduler it sizes the scheduler's own
+	// request pool and may go deeper. See tuneBlockQueue.
 	IOScheduler  string
 	MaxSectorsKB int
+	NrRequests   int
 
 	// NVMe-oF connection timeouts (seconds), passed to `nvme connect`.
 	ReconnectDelay int

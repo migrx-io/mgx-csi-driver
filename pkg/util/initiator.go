@@ -40,6 +40,7 @@ type initiatorNVMf struct {
 	timeout        int
 	ioScheduler    string
 	maxSectorsKB   int
+	nrRequests     int
 }
 
 func NewMGXClient() (*NodeNVMf, error) {
@@ -81,6 +82,7 @@ func NewMGXCsiInitiator(volumeContext map[string]string, conf *Config) (MGXCsiIn
 		timeout:        conf.NvmeTimeoutSec,
 		ioScheduler:    conf.IOScheduler,
 		maxSectorsKB:   conf.MaxSectorsKB,
+		nrRequests:     conf.NrRequests,
 	}, nil
 }
 
@@ -151,7 +153,7 @@ func (nvmf *initiatorNVMf) Connect(nrIoQueues, queueSize int) (string, error) {
 
 	// Applied on every Connect, not just when we ran `nvme connect`: the block
 	// device is recreated on reattach and comes back with udev's default.
-	if serr := tuneBlockQueue(devicePath, nvmf.ioScheduler, nvmf.maxSectorsKB); serr != nil {
+	if serr := tuneBlockQueue(devicePath, nvmf.ioScheduler, nvmf.maxSectorsKB, nvmf.nrRequests); serr != nil {
 		// Not fatal - the volume is fully usable, only QoS accounting and
 		// request sizing are left at the kernel's defaults.
 		klog.Warningf("could not tune block queue for %s: %v", devicePath, serr)
@@ -162,27 +164,15 @@ func (nvmf *initiatorNVMf) Connect(nrIoQueues, queueSize int) (string, error) {
 
 // tuneBlockQueue applies block-layer queue settings to a freshly attached
 // device so that an mgx volume presents the same queue as a local NVMe/EBS one.
-//
-// scheduler: udev assigns `mq-deadline` to nvme-tcp devices on some distros
-// (Amazon Linux 2023 among them), while local NVMe and EBS get `none`.
-// mq-deadline merges adjacent requests up to max_sectors_kb, so a sequential 4K
-// writer reaches the target as ~128 KiB I/Os. The target's bdev QoS counts
-// operations, so qos_rw_ios_per_sec sees ~1/32 of the client's IOPS and never
-// engages - measured 27,000 IOPS against a 3,000 IOPS cap, where random I/O
-// (unmergeable) capped correctly at ~2,750. `none` restores parity with EBS.
-//
-// maxSectorsKB: the largest single request the block layer will issue. The
-// kernel rejects any value above the device's max_hw_sectors_kb, so the request
-// is clamped instead of failing. That ceiling is the MDTS the target
-// advertises, and nvme-tcp reports 128 KiB where EBS reports 256 - so asking
-// for EBS parity here is satisfied only as far as the transport allows.
+// Each setting is handled by its own apply* helper, which documents why that
+// attribute matters here; zero/empty settings are left alone.
 //
 // devicePath is a /dev/disk/by-id symlink, so it is resolved to the kernel name
 // first. Writing a value that is already set is a kernel no-op, which makes
-// this idempotent across reconnects. Zero/empty settings are left alone, and
-// both attributes are attempted even if one fails.
-func tuneBlockQueue(devicePath, scheduler string, maxSectorsKB int) error {
-	if scheduler == "" && maxSectorsKB <= 0 {
+// this idempotent across reconnects. Every attribute is attempted even if an
+// earlier one fails, and the failures are reported together.
+func tuneBlockQueue(devicePath, scheduler string, maxSectorsKB, nrRequests int) error {
+	if scheduler == "" && maxSectorsKB <= 0 && nrRequests <= 0 {
 		return nil
 	}
 
@@ -195,42 +185,126 @@ func tuneBlockQueue(devicePath, scheduler string, maxSectorsKB int) error {
 	// built from it can escape /sys/block.
 	dev := filepath.Base(resolved) // /dev/nvme1n1 -> nvme1n1
 
+	// Ordering matters: switching schedulers reallocates the request pool and
+	// resets nr_requests, so the depth has to be applied after the scheduler.
+	// errors.Join drops the nils, so unset attributes contribute nothing.
 	var errs []error
 
 	if scheduler != "" {
-		if werr := writeQueueAttr(dev, "scheduler", scheduler); werr != nil {
-			errs = append(errs, werr)
-		} else {
-			klog.Infof("%s: scheduler set to %s", dev, scheduler)
-		}
+		errs = append(errs, applyScheduler(dev, scheduler))
 	}
 
 	if maxSectorsKB > 0 {
-		want := maxSectorsKB
+		errs = append(errs, applyMaxSectorsKB(dev, maxSectorsKB))
+	}
 
-		hw, herr := readQueueAttrInt(dev, "max_hw_sectors_kb")
-		switch {
-		case herr != nil:
-			errs = append(errs, herr)
-
-			want = 0
-		case want > hw:
-			klog.Infof("%s: max_sectors_kb %d above hardware limit %d, clamping",
-				dev, want, hw)
-
-			want = hw
-		}
-
-		if want > 0 {
-			if werr := writeQueueAttr(dev, "max_sectors_kb", strconv.Itoa(want)); werr != nil {
-				errs = append(errs, werr)
-			} else {
-				klog.Infof("%s: max_sectors_kb set to %d", dev, want)
-			}
-		}
+	if nrRequests > 0 {
+		errs = append(errs, applyNrRequests(dev, nrRequests))
 	}
 
 	return errors.Join(errs...)
+}
+
+// applyScheduler selects the block-layer I/O scheduler.
+//
+// udev assigns `mq-deadline` to nvme-tcp devices on some distros (Amazon Linux
+// 2023 among them), while local NVMe and EBS get `none`. mq-deadline merges
+// adjacent requests up to max_sectors_kb, so a sequential 4K writer reaches the
+// target as ~128 KiB I/Os. The target's bdev QoS counts operations, so
+// qos_rw_ios_per_sec sees ~1/32 of the client's IOPS and never engages -
+// measured 27,000 IOPS against a 3,000 IOPS cap, where random I/O (unmergeable)
+// capped correctly at ~2,750. `none` restores parity with EBS.
+func applyScheduler(dev, scheduler string) error {
+	if err := writeQueueAttr(dev, "scheduler", scheduler); err != nil {
+		return err
+	}
+
+	klog.Infof("%s: scheduler set to %s", dev, scheduler)
+
+	return nil
+}
+
+// applyMaxSectorsKB sets the largest single request the block layer will issue.
+//
+// The kernel rejects any value above the device's max_hw_sectors_kb, so the
+// request is clamped instead of failing. That ceiling is the MDTS the target
+// advertises, and nvme-tcp reports 128 KiB where EBS reports 256 - so asking
+// for EBS parity here is satisfied only as far as the transport allows.
+func applyMaxSectorsKB(dev string, want int) error {
+	hw, err := readQueueAttrInt(dev, "max_hw_sectors_kb")
+	if err != nil {
+		return err
+	}
+
+	if want > hw {
+		klog.Infof("%s: max_sectors_kb %d above hardware limit %d, clamping",
+			dev, want, hw)
+
+		want = hw
+	}
+
+	return writeQueueAttrInt(dev, "max_sectors_kb", want)
+}
+
+// applyNrRequests sets how many requests the block layer will keep queued for
+// the device.
+//
+// Under `none` there is no scheduler request pool, so this is just the
+// controller's tag depth and the kernel rejects anything above it with EINVAL;
+// it is clamped, and nr-io-queues * queue-size is what actually raises the
+// ceiling. Under a real scheduler the pool is separate from the tags and can be
+// made deeper, which buys more requests to merge and reorder at the cost of
+// queueing latency.
+func applyNrRequests(dev string, want int) error {
+	// The effective scheduler is read back rather than taken from the
+	// configured value, since an empty setting leaves whatever udev picked.
+	sched, err := readQueueScheduler(dev)
+	if err != nil {
+		return err
+	}
+
+	if sched == "none" {
+		// The tag depth is what nr_requests already reads back as here.
+		depth, derr := readQueueAttrInt(dev, "nr_requests")
+		if derr != nil {
+			return derr
+		}
+
+		if want > depth {
+			klog.Infof("%s: nr_requests %d above the %d tags the controller granted, clamping; raise queue-size/nr-io-queues or set an I/O scheduler to queue deeper",
+				dev, want, depth)
+
+			want = depth
+		}
+	}
+
+	return writeQueueAttrInt(dev, "nr_requests", want)
+}
+
+// readQueueScheduler returns the active scheduler, which sysfs reports as the
+// bracketed entry in the list of available ones ("[none] mq-deadline kyber
+// bfq"). An unbracketed single entry means there is nothing to choose from, so
+// that name is the active one.
+func readQueueScheduler(dev string) (string, error) {
+	path := queueAttrPath(dev, "scheduler")
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", path, err)
+	}
+
+	fields := strings.Fields(string(raw))
+	for _, name := range fields {
+		if strings.HasPrefix(name, "[") && strings.HasSuffix(name, "]") {
+			return strings.Trim(name, "[]"), nil
+		}
+	}
+
+	if len(fields) == 1 {
+		return fields[0], nil
+	}
+
+	return "", fmt.Errorf("parse %s: no active scheduler in %q", path, strings.TrimSpace(string(raw)))
 }
 
 // queueAttrPath builds /sys/block/<dev>/queue/<attr>. Sprintf rather than
@@ -247,6 +321,18 @@ func writeQueueAttr(dev, attr, value string) error {
 	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
+
+	return nil
+}
+
+// writeQueueAttrInt writes a numeric queue attribute and logs what landed, so
+// the node log records the queue each volume was actually attached with.
+func writeQueueAttrInt(dev, attr string, value int) error {
+	if err := writeQueueAttr(dev, attr, strconv.Itoa(value)); err != nil {
+		return err
+	}
+
+	klog.Infof("%s: %s set to %d", dev, attr, value)
 
 	return nil
 }

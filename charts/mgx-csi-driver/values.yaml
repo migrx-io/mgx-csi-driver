@@ -142,8 +142,16 @@ node:
   #   advertises -- nvme-tcp reports 128 KiB where EBS reports 256, so this
   #   currently lands at 128 and will follow if the target raises its MDTS.
   #   0 leaves the kernel default.
+  # nrRequests: how many requests the block layer keeps queued per device.
+  #   With ioScheduler "none" there is no scheduler request pool, so this is
+  #   the controller's tag depth and cannot be raised above it -- values that
+  #   overshoot are clamped, and nrIoQueues * queueSize is the knob that
+  #   actually moves the ceiling. With mq-deadline/bfq the pool is separate
+  #   from the tags and can be deeper, giving the scheduler more to merge and
+  #   reorder at the cost of queueing latency. 0 leaves the kernel default.
   ioScheduler: "none"
-  maxSectorsKB: 256
+  maxSectorsKB: 128
+  nrRequests: 10
   # NVMe-oF connection timeouts (seconds) passed to `nvme connect`.
   # fastIoFailTmo: how long the host queues I/O on a lost controller before
   #   failing fast with EIO. 0 = fail immediately on any controller fault.
