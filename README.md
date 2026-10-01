@@ -269,7 +269,7 @@ StorageClass with these `parameters`:
 | `qosRWIOPS` | `qos_rw_ios_per_sec` | _(unset)_ | Combined R/W IOPS cap. |
 | `storageEncryptSecret` | `storage_encrypt_secret` | _(unset)_ | Name of the encryption secret. |
 | `storageCompress` | `storage_compress` | _(unset)_ | Compression level, `0`–`9`. |
-| `extraParams.<key>` | `<key>` | _(see below)_ | s3backer / nbdkit cache filter tuning, combined into the volume's `extra_params`, see [extraParams tuning](#extraparams-tuning). |
+| `extraParams.<key>` | `<key>` | _(see below)_ | nbdkit plugin and cache filter tuning, combined into the volume's `extra_params`, see [extraParams tuning](#extraparams-tuning). |
 | `reclaimPolicy` | — | `Delete` | `Delete` or `Retain`. |
 
 The StorageClass is created with `volumeBindingMode: Immediate` and

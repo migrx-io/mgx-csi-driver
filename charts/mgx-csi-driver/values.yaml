@@ -79,7 +79,7 @@ storageclass:
     cache_write_throttle_ms: "50"        # --nbd-param=cache-write-throttle-ms
     cache_min_block_size: "4096"         # --nbd-param=cache-min-block-size
     cache_high_threshold: "95"           # --nbd-param=cache-high-threshold (%)
-    cache_low_threshold: "85"            # --nbd-param=cache-low-threshold (%, <= high)
+    cache_low_threshold: "85"            # --nbd-param=cache-low-threshold (%, < high)
     cache_reclaim_scan_blocks: "12800"   # --nbd-param=cache-reclaim-scan-blocks
     cache_reclaim_scan_tries: "20"       # --nbd-param=cache-reclaim-scan-tries
     cache_stats_interval: "500"          # --nbd-param=cache-stats-interval (ms)

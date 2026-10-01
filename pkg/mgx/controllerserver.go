@@ -480,9 +480,7 @@ type volumeTuning struct {
 	QosRWIosPerSec       int
 	StorageCompress      int
 	StorageEncryptSecret string
-	// ExtraParams are the s3backer/nbdkit args combined from the StorageClass
-	// tunables (see buildExtraParams), appended to the s3backer command line
-	// when the volume starts.
+	// ExtraParams is the nbdkit plugin arg list built by buildExtraParams
 	ExtraParams string
 }
 

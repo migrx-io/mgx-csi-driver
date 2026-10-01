@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// the defaults must reproduce the s3backer args the node image shipped with
+// arg list produced when no parameter is set
 const defaultExtraParams = "--nbd-flag=--threads=32 " +
 	"--nbd-param=cache-purge-on-stop=true " +
 	"--nbd-param=cache-flush-threads=10 " +
@@ -85,6 +85,11 @@ func TestBuildExtraParamsInvalid(t *testing.T) {
 		"not a bool":        {"cache_purge_on_stop": "maybe"},
 		"low above high":    {"cache_high_threshold": "80", "cache_low_threshold": "90"},
 		"low above default": {"cache_low_threshold": "96"},
+		"low equals high":   {"cache_high_threshold": "90", "cache_low_threshold": "90"},
+		"zero lru":          {"cache_lru_percent": "0"},
+		"not power of 2":    {"cache_min_block_size": "6144"},
+		"batch too large":   {"cache_readahead_batch": "65"},
+		"retry pause order": {"initial_retry_pause": "5000"},
 	}
 
 	for name, params := range cases {
