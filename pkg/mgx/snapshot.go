@@ -214,8 +214,8 @@ func armRestorePoint(mgxClient *util.NodeNVMf, req *csi.CreateSnapshotRequest, r
 	// is forwarded; unset falls back to the config.
 	for _, k := range []string{"transfers", "checkers", "max_increments"} {
 		if v := req.GetParameters()[k]; v != "" {
-			n, err := strconv.Atoi(v)
-			if err != nil || n < 0 {
+			n, perr := strconv.Atoi(v)
+			if perr != nil || n < 0 {
 				return nil, status.Errorf(codes.InvalidArgument, "invalid %s %q: expected a non-negative integer", k, v)
 			}
 			addParams[k] = n
