@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -206,6 +207,18 @@ func armRestorePoint(mgxClient *util.NodeNVMf, req *csi.CreateSnapshotRequest, r
 	for _, k := range []string{"incremental", "mode", "storage_class", "labels"} {
 		if v := req.GetParameters()[k]; v != "" {
 			addParams[k] = v
+		}
+	}
+	// Integer overrides of the config's rclone concurrency and incremental
+	// chain cap. max_increments 0 is meaningful (unlimited), so any set value
+	// is forwarded; unset falls back to the config.
+	for _, k := range []string{"transfers", "checkers", "max_increments"} {
+		if v := req.GetParameters()[k]; v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				return nil, status.Errorf(codes.InvalidArgument, "invalid %s %q: expected a non-negative integer", k, v)
+			}
+			addParams[k] = n
 		}
 	}
 

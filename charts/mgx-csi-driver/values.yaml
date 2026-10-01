@@ -135,6 +135,17 @@ volumeSnapshotClass:
   # not restorable.
   storageClass: ""
 
+  # Override the config profile's rclone concurrency per job (unset = config
+  # default): transfers = concurrent server side copies, checkers = concurrent
+  # list/compare workers.
+  # transfers: 4
+  # checkers: 8
+
+  # Override the config profile's max restore points in an incremental chain
+  # (0 = unlimited, unset = config default). When full, a new snapshot is
+  # refused until the oldest is deleted.
+  # maxIncrements: 0
+
   # Optional per-snapshot overrides forwarded to the snapshot plugin.
   # labels: "storage=mgx"
 

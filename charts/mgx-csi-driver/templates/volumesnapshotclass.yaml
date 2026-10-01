@@ -23,4 +23,13 @@ parameters:
   {{- if .Values.volumeSnapshotClass.storageClass }}
   storage_class: "{{ .Values.volumeSnapshotClass.storageClass }}"
   {{- end }}
+  {{- if .Values.volumeSnapshotClass.transfers }}
+  transfers: "{{ .Values.volumeSnapshotClass.transfers }}"
+  {{- end }}
+  {{- if .Values.volumeSnapshotClass.checkers }}
+  checkers: "{{ .Values.volumeSnapshotClass.checkers }}"
+  {{- end }}
+  {{- if ne (toString .Values.volumeSnapshotClass.maxIncrements) "<nil>" }}
+  max_increments: "{{ .Values.volumeSnapshotClass.maxIncrements }}"
+  {{- end }}
 {{- end -}}

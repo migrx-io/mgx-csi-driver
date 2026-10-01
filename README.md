@@ -319,6 +319,9 @@ The StorageClass is created with `volumeBindingMode: Immediate` and
 | `config` | `config` | _(server default)_ | Snapshot plugin config profile name. |
 | `incremental` | `incremental` | `yes` | `yes` keeps full + incremental history (restorable PITs); `no` keeps a single rolling latest-only backup. |
 | `storageClass` | `storage_class` | _(bucket default)_ | Destination S3 storage class. Use one whose objects can be read back directly: `STANDARD`, `STANDARD_IA`, `ONEZONE_IA`, `INTELLIGENT_TIERING`, `GLACIER_IR`. `GLACIER` and `DEEP_ARCHIVE` need an explicit S3 restore first, so a snapshot sent there is not restorable. |
+| `transfers` | `transfers` | _(config default)_ | Concurrent server side copies per job (rclone `--transfers`). |
+| `checkers` | `checkers` | _(config default)_ | Concurrent list/compare workers per job (rclone `--checkers`). |
+| `maxIncrements` | `max_increments` | _(config default)_ | Max restore points in an incremental chain (`0` = unlimited). When full, new snapshots are refused until the oldest is deleted. |
 | `labels` | `labels` | _(unset)_ | Per-snapshot labels. |
 | `deletionPolicy` | — | `Delete` | `Delete` or `Retain` — fate of the backup when the VolumeSnapshot is removed. |
 | `isDefault` | — | `false` | Mark as the cluster default VolumeSnapshotClass. |
