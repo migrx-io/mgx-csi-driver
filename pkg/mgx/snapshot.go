@@ -313,6 +313,9 @@ func (*controllerServer) scheduleRestore(req *csi.CreateVolumeRequest, mgxClient
 	if tuning.StorageEncryptSecret != "" {
 		restoreParams["storage_encrypt_secret"] = tuning.StorageEncryptSecret
 	}
+	if tuning.ExtraParams != "" {
+		restoreParams["extra_params"] = tuning.ExtraParams
+	}
 
 	if aerr := mgxClient.AddRestore(restoreParams); aerr != nil {
 		klog.Errorf("scheduleRestore: restore_add failed, restoreName: %s err: %s", restoreName, aerr)

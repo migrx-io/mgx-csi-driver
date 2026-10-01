@@ -38,6 +38,10 @@ parameters:
   {{- if .Values.storageclass.storageCompress }}
   storage_compress: "{{ .Values.storageclass.storageCompress }}"
   {{- end }}
+  {{- /* unquoted yaml numbers arrive as float64 (1000000 -> 1e+06), render them as ints */}}
+  {{- range $key, $value := .Values.storageclass.extraParams }}
+  {{ $key }}: {{ (kindIs "float64" $value) | ternary ($value | int64) $value | toString | quote }}
+  {{- end }}
 reclaimPolicy: {{ .Values.storageclass.reclaimPolicy | default "Delete" }}
 volumeBindingMode: Immediate
 allowVolumeExpansion: true

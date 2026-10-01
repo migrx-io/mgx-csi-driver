@@ -269,10 +269,48 @@ StorageClass with these `parameters`:
 | `qosRWIOPS` | `qos_rw_ios_per_sec` | _(unset)_ | Combined R/W IOPS cap. |
 | `storageEncryptSecret` | `storage_encrypt_secret` | _(unset)_ | Name of the encryption secret. |
 | `storageCompress` | `storage_compress` | _(unset)_ | Compression level, `0`–`9`. |
+| `extraParams.<key>` | `<key>` | _(see below)_ | s3backer / nbdkit cache filter tuning, combined into the volume's `extra_params`, see [extraParams tuning](#extraparams-tuning). |
 | `reclaimPolicy` | — | `Delete` | `Delete` or `Retain`. |
 
 The StorageClass is created with `volumeBindingMode: Immediate` and
 `allowVolumeExpansion: true`.
+
+### extraParams tuning
+
+| SC parameter | Default | Flag |
+| --- | --- | --- |
+| `nbd_threads` | `32` | `--nbd-flag=--threads` |
+| `cache_purge_on_stop` | `true` | `--nbd-param=cache-purge-on-stop` |
+| `cache_flush_threads` | `10` | `--nbd-param=cache-flush-threads` |
+| `cache_flush_interval` | `300` | `--nbd-param=cache-flush-interval` |
+| `cache_flush_blocks` | `5` | `--nbd-param=cache-flush-blocks` |
+| `cache_flush_max_age` | `3000` | `--nbd-param=cache-flush-max-age` |
+| `cache_write_throttle_ms` | `50` | `--nbd-param=cache-write-throttle-ms` |
+| `cache_min_block_size` | `4096` | `--nbd-param=cache-min-block-size` |
+| `cache_high_threshold` | `95` | `--nbd-param=cache-high-threshold` |
+| `cache_low_threshold` | `85` | `--nbd-param=cache-low-threshold` |
+| `cache_reclaim_scan_blocks` | `12800` | `--nbd-param=cache-reclaim-scan-blocks` |
+| `cache_reclaim_scan_tries` | `20` | `--nbd-param=cache-reclaim-scan-tries` |
+| `cache_stats_interval` | `500` | `--nbd-param=cache-stats-interval` |
+| `cache_lru_percent` | `50` | `--nbd-param=cache-lru-percent` |
+| `cache_reclaim_high_count` | `2` | `--nbd-param=cache-reclaim-high-count` |
+| `cache_reclaim_max_count` | `64` | `--nbd-param=cache-reclaim-max-count` |
+| `cache_max_overflow_percent` | `5` | `--nbd-param=cache-max-overflow-percent` |
+| `cache_fill_threshold` | `100` | `--nbd-param=cache-fill-threshold` |
+| `cache_readahead_trigger` | `3` | `--nbd-param=cache-readahead-trigger` |
+| `cache_readahead_blocks` | `32` | `--nbd-param=cache-readahead-blocks` |
+| `cache_readahead_batch` | `4` | `--nbd-param=cache-readahead-batch` |
+| `cache_readahead_threads` | `8` | `--nbd-param=cache-readahead-threads` |
+| `cache_sync_interval` | `300` | `--nbd-param=cache-sync-interval` |
+| `cache_persist_interval` | `1000` | `--nbd-param=cache-persist-interval` |
+| `block_cache_flush_threads` | `30` | `--cacheFlushThreads` |
+| `block_read_threads` | `32` | `--blockReadThreads` |
+| `block_cache_size` | `300` | `--blockCacheSize` |
+| `block_cache_threads` | `30` | `--blockCacheThreads` |
+| `list_blocks_threads` | `30` | `--listBlocksThreads` |
+| `block_cache_write_delay` | `0` | `--blockCacheWriteDelay` |
+| `initial_retry_pause` | `300` | `--initialRetryPause` |
+| `max_retry_pause` | `3000` | `--maxRetryPause` |
 
 ### VolumeSnapshotClass parameters
 

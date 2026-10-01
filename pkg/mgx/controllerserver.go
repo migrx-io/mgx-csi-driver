@@ -480,6 +480,10 @@ type volumeTuning struct {
 	QosRWIosPerSec       int
 	StorageCompress      int
 	StorageEncryptSecret string
+	// ExtraParams are the s3backer/nbdkit args combined from the StorageClass
+	// tunables (see buildExtraParams), appended to the s3backer command line
+	// when the volume starts.
+	ExtraParams string
 }
 
 // extractVolumeTuning derives the cache/QoS/storage settings from StorageClass
@@ -535,6 +539,11 @@ func extractVolumeTuning(params map[string]string, sizeMiB int64) (*volumeTuning
 		return nil, err
 	}
 
+	extra_params, err := buildExtraParams(params)
+	if err != nil {
+		return nil, err
+	}
+
 	return &volumeTuning{
 		// calc cache size based on cache attributes and the requested size
 		CacheRCacheSize:      calculateCacheSize(int(sizeMiB), min_cache_r_cache_size, max_cache_r_cache_size, ratio_cache_r_cache_size),
@@ -545,6 +554,7 @@ func extractVolumeTuning(params map[string]string, sizeMiB int64) (*volumeTuning
 		QosRWIosPerSec:       qos_rw_ios_per_sec,
 		StorageCompress:      storage_compress,
 		StorageEncryptSecret: params["storage_encrypt_secret"],
+		ExtraParams:          extra_params,
 	}, nil
 }
 
@@ -563,6 +573,7 @@ func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, siz
 	// size: <size>
 	// storage_compress: <storage_compress>
 	// storage_encrypt_secret: <storage_encrypt_secret>
+	// extra_params: <extra_params>
 
 	//
 	// calculate cache size based on volume size request
@@ -586,6 +597,7 @@ func prepareCreateVolumeReq(_ context.Context, req *csi.CreateVolumeRequest, siz
 		QosRWIosPerSec:       tuning.QosRWIosPerSec,
 		StorageEncryptSecret: tuning.StorageEncryptSecret,
 		StorageCompress:      tuning.StorageCompress,
+		ExtraParams:          tuning.ExtraParams,
 	}
 	return &createVolReq, nil
 }

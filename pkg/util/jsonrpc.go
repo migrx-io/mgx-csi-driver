@@ -33,6 +33,7 @@ type CreateLVolData struct {
 	QosRWIosPerSec       int    `json:"qos_rw_ios_per_sec"`
 	StorageEncryptSecret string `json:"storage_encrypt_secret"`
 	StorageCompress      int    `json:"storage_compress"`
+	ExtraParams          string `json:"extra_params,omitempty"`
 }
 
 type LvolResp struct {
