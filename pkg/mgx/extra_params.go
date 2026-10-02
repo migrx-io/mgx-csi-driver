@@ -102,10 +102,10 @@ func buildExtraParams(params map[string]string) (string, error) {
 
 // normalize validates value and returns it in canonical form. For int
 // parameters it also returns the parsed number and isInt=true.
-func (p extraParam) normalize(value string) (string, int, bool, error) {
+func (p *extraParam) normalize(value string) (canonical string, n int, isInt bool, err error) {
 	if p.isBool {
-		b, err := strconv.ParseBool(value)
-		if err != nil {
+		b, perr := strconv.ParseBool(value)
+		if perr != nil {
 			return "", 0, false, fmt.Errorf("invalid %s %q: expected true or false", p.key, value)
 		}
 		return strconv.FormatBool(b), 0, false, nil
@@ -117,7 +117,7 @@ func (p extraParam) normalize(value string) (string, int, bool, error) {
 		return value, 0, false, nil
 	}
 
-	n, err := strconv.Atoi(value)
+	n, err = strconv.Atoi(value)
 	if err != nil {
 		return "", 0, false, fmt.Errorf("invalid %s %q: expected an integer", p.key, value)
 	}
