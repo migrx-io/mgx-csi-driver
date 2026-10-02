@@ -2,19 +2,21 @@ package mgx
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
 
 // extraParam maps a StorageClass parameter to an nbdkit plugin flag.
 type extraParam struct {
-	key    string // StorageClass parameter name
-	flag   string // flag prefix, the value is appended as is
-	def    string // used when the parameter is not set; "" = leave flag out
-	isBool bool   // value is a bool, otherwise a non-negative int
-	min    int    // lowest allowed int value
-	max    int    // highest allowed int value, 0 = unbounded
-	pow2   bool   // int value must be a power of 2
+	key     string   // StorageClass parameter name
+	flag    string   // flag prefix, the value is appended as is
+	def     string   // used when the parameter is not set; "" = leave flag out
+	isBool  bool     // value is a bool, otherwise a non-negative int
+	choices []string // value is one of these strings, otherwise a non-negative int
+	min     int      // lowest allowed int value
+	max     int      // highest allowed int value, 0 = unbounded
+	pow2    bool     // int value must be a power of 2
 }
 
 // extraParamDefs lists the StorageClass tunables in command line order.
@@ -34,6 +36,7 @@ var extraParamDefs = []extraParam{
 	{key: "cache_reclaim_scan_tries", flag: "--nbd-param=cache-reclaim-scan-tries=", def: "20"},
 	{key: "cache_stats_interval", flag: "--nbd-param=cache-stats-interval=", def: "500"},
 	{key: "cache_lru_percent", flag: "--nbd-param=cache-lru-percent=", def: "50", min: 1, max: 100},
+	{key: "cache_reclaim_policy", flag: "--nbd-param=cache-reclaim-policy=", def: "write-first", choices: []string{"write-first", "lru"}},
 	{key: "cache_reclaim_high_count", flag: "--nbd-param=cache-reclaim-high-count=", def: "2", min: 1},
 	{key: "cache_reclaim_max_count", flag: "--nbd-param=cache-reclaim-max-count=", def: "64", min: 1},
 	{key: "cache_max_overflow_percent", flag: "--nbd-param=cache-max-overflow-percent=", def: "5", max: 100},
@@ -76,6 +79,10 @@ func buildExtraParams(params map[string]string) (string, error) {
 				return "", fmt.Errorf("invalid %s %q: expected true or false", p.key, value)
 			}
 			value = strconv.FormatBool(b)
+		} else if len(p.choices) > 0 {
+			if !slices.Contains(p.choices, value) {
+				return "", fmt.Errorf("invalid %s %q: expected one of %s", p.key, value, strings.Join(p.choices, ", "))
+			}
 		} else {
 			n, err := strconv.Atoi(value)
 			if err != nil {

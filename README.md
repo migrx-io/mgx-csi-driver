@@ -293,6 +293,7 @@ The StorageClass is created with `volumeBindingMode: Immediate` and
 | `cache_reclaim_scan_tries` | `20` | `--nbd-param=cache-reclaim-scan-tries` |
 | `cache_stats_interval` | `500` | `--nbd-param=cache-stats-interval` |
 | `cache_lru_percent` | `50` | `--nbd-param=cache-lru-percent` |
+| `cache_reclaim_policy` | `write-first` | `--nbd-param=cache-reclaim-policy` |
 | `cache_reclaim_high_count` | `2` | `--nbd-param=cache-reclaim-high-count` |
 | `cache_reclaim_max_count` | `64` | `--nbd-param=cache-reclaim-max-count` |
 | `cache_max_overflow_percent` | `5` | `--nbd-param=cache-max-overflow-percent` |

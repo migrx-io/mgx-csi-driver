@@ -20,6 +20,7 @@ const defaultExtraParams = "--nbd-flag=--threads=32 " +
 	"--nbd-param=cache-reclaim-scan-tries=20 " +
 	"--nbd-param=cache-stats-interval=500 " +
 	"--nbd-param=cache-lru-percent=50 " +
+	"--nbd-param=cache-reclaim-policy=write-first " +
 	"--nbd-param=cache-reclaim-high-count=2 " +
 	"--nbd-param=cache-reclaim-max-count=64 " +
 	"--nbd-param=cache-max-overflow-percent=5 " +
@@ -51,10 +52,11 @@ func TestBuildExtraParamsDefaults(t *testing.T) {
 
 func TestBuildExtraParamsOverrides(t *testing.T) {
 	got, err := buildExtraParams(map[string]string{
-		"cache_flush_threads": " 16 ",
-		"cache_purge_on_stop": "False",
-		"block_cache_size":    "",
-		"extra_params":        "--foo=1\n  --bar",
+		"cache_flush_threads":  " 16 ",
+		"cache_purge_on_stop":  "False",
+		"cache_reclaim_policy": " lru ",
+		"block_cache_size":     "",
+		"extra_params":         "--foo=1\n  --bar",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -63,6 +65,7 @@ func TestBuildExtraParamsOverrides(t *testing.T) {
 	for _, want := range []string{
 		"--nbd-param=cache-flush-threads=16",
 		"--nbd-param=cache-purge-on-stop=false",
+		"--nbd-param=cache-reclaim-policy=lru",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in %q", want, got)
@@ -87,6 +90,7 @@ func TestBuildExtraParamsInvalid(t *testing.T) {
 		"low above default": {"cache_low_threshold": "96"},
 		"low equals high":   {"cache_high_threshold": "90", "cache_low_threshold": "90"},
 		"zero lru":          {"cache_lru_percent": "0"},
+		"unknown policy":    {"cache_reclaim_policy": "lfu"},
 		"not power of 2":    {"cache_min_block_size": "6144"},
 		"batch too large":   {"cache_readahead_batch": "65"},
 		"retry pause order": {"initial_retry_pause": "5000"},
