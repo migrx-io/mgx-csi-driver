@@ -73,32 +73,12 @@ func buildExtraParams(params map[string]string) (string, error) {
 			continue
 		}
 
-		if p.isBool {
-			b, err := strconv.ParseBool(value)
-			if err != nil {
-				return "", fmt.Errorf("invalid %s %q: expected true or false", p.key, value)
-			}
-			value = strconv.FormatBool(b)
-		} else if len(p.choices) > 0 {
-			if !slices.Contains(p.choices, value) {
-				return "", fmt.Errorf("invalid %s %q: expected one of %s", p.key, value, strings.Join(p.choices, ", "))
-			}
-		} else {
-			n, err := strconv.Atoi(value)
-			if err != nil {
-				return "", fmt.Errorf("invalid %s %q: expected an integer", p.key, value)
-			}
-			if n < p.min {
-				return "", fmt.Errorf("invalid %s %d: must be >= %d", p.key, n, p.min)
-			}
-			if p.max > 0 && n > p.max {
-				return "", fmt.Errorf("invalid %s %d: must be <= %d", p.key, n, p.max)
-			}
-			if p.pow2 && n&(n-1) != 0 {
-				return "", fmt.Errorf("invalid %s %d: must be a power of 2", p.key, n)
-			}
+		value, n, isInt, err := p.normalize(value)
+		if err != nil {
+			return "", err
+		}
+		if isInt {
 			ints[p.key] = n
-			value = strconv.Itoa(n)
 		}
 
 		args = append(args, p.flag+value)
@@ -118,6 +98,39 @@ func buildExtraParams(params map[string]string) (string, error) {
 	}
 
 	return strings.Join(args, " "), nil
+}
+
+// normalize validates value and returns it in canonical form. For int
+// parameters it also returns the parsed number and isInt=true.
+func (p extraParam) normalize(value string) (string, int, bool, error) {
+	if p.isBool {
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return "", 0, false, fmt.Errorf("invalid %s %q: expected true or false", p.key, value)
+		}
+		return strconv.FormatBool(b), 0, false, nil
+	}
+	if len(p.choices) > 0 {
+		if !slices.Contains(p.choices, value) {
+			return "", 0, false, fmt.Errorf("invalid %s %q: expected one of %s", p.key, value, strings.Join(p.choices, ", "))
+		}
+		return value, 0, false, nil
+	}
+
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return "", 0, false, fmt.Errorf("invalid %s %q: expected an integer", p.key, value)
+	}
+	if n < p.min {
+		return "", 0, false, fmt.Errorf("invalid %s %d: must be >= %d", p.key, n, p.min)
+	}
+	if p.max > 0 && n > p.max {
+		return "", 0, false, fmt.Errorf("invalid %s %d: must be <= %d", p.key, n, p.max)
+	}
+	if p.pow2 && n&(n-1) != 0 {
+		return "", 0, false, fmt.Errorf("invalid %s %d: must be a power of 2", p.key, n)
+	}
+	return strconv.Itoa(n), n, true, nil
 }
 
 // checkOrder requires lowKey < highKey (or <= when equal is allowed) when both
