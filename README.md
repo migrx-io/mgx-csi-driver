@@ -304,6 +304,13 @@ The StorageClass is created with `volumeBindingMode: Immediate` and
 | `cache_readahead_threads` | `8` | `--nbd-param=cache-readahead-threads` |
 | `cache_sync_interval` | `300` | `--nbd-param=cache-sync-interval` |
 | `cache_persist_interval` | `1000` | `--nbd-param=cache-persist-interval` |
+| `cache_snapshot_idle_interval` | unset (filter: `10000`) | `--nbd-param=cache-snapshot-idle-interval` |
+| `cache_snapshot_interval` | unset (filter: `100`) | `--nbd-param=cache-snapshot-interval` |
+| `cache_snapshot_gate_mb` | unset (filter: `64`) | `--nbd-param=cache-snapshot-gate-bytes` (MB; `0` never pauses writes) |
+| `cache_snapshot_gate_ms` | unset (filter: `2000`) | `--nbd-param=cache-snapshot-gate-ms` |
+| `cache_snapshot_drain_timeout` | unset (filter: `600000`) | `--nbd-param=cache-snapshot-drain-timeout` |
+| `cache_snapshot_lease` | unset (filter: `300000`) | `--nbd-param=cache-snapshot-lease` (`0` = no lease) |
+| `cache_snapshot_max_dirty_mb` | unset (filter: `cache-write-max-size`) | `--nbd-param=cache-snapshot-max-dirty` (MB; `0` = no limit) |
 | `block_cache_flush_threads` | `30` | `--cacheFlushThreads` |
 | `block_read_threads` | `32` | `--blockReadThreads` |
 | `block_cache_size` | `300` | `--blockCacheSize` |

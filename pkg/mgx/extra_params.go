@@ -17,6 +17,7 @@ type extraParam struct {
 	min     int      // lowest allowed int value
 	max     int      // highest allowed int value, 0 = unbounded
 	pow2    bool     // int value must be a power of 2
+	suffix  string   // appended to the value in the flag, ex "M" for a size in MB
 }
 
 // extraParamDefs lists the StorageClass tunables in command line order.
@@ -47,6 +48,16 @@ var extraParamDefs = []extraParam{
 	{key: "cache_readahead_threads", flag: "--nbd-param=cache-readahead-threads=", def: "8", min: 1, max: 256},
 	{key: "cache_sync_interval", flag: "--nbd-param=cache-sync-interval=", def: "300", max: 600000},
 	{key: "cache_persist_interval", flag: "--nbd-param=cache-persist-interval=", def: "1000", max: 600000},
+	// snapshot cut coordinator (swal cache filter). Empty default: the flag is
+	// only passed when set, so a node still running a filter without these
+	// parameters keeps starting.
+	{key: "cache_snapshot_idle_interval", flag: "--nbd-param=cache-snapshot-idle-interval=", def: "", min: 10, max: 600000},
+	{key: "cache_snapshot_interval", flag: "--nbd-param=cache-snapshot-interval=", def: "", min: 10, max: 10000},
+	{key: "cache_snapshot_gate_mb", flag: "--nbd-param=cache-snapshot-gate-bytes=", def: "", suffix: "M"},
+	{key: "cache_snapshot_gate_ms", flag: "--nbd-param=cache-snapshot-gate-ms=", def: "", min: 1, max: 60000},
+	{key: "cache_snapshot_drain_timeout", flag: "--nbd-param=cache-snapshot-drain-timeout=", def: "", min: 1},
+	{key: "cache_snapshot_lease", flag: "--nbd-param=cache-snapshot-lease=", def: ""},
+	{key: "cache_snapshot_max_dirty_mb", flag: "--nbd-param=cache-snapshot-max-dirty=", def: "", suffix: "M"},
 	{key: "block_cache_flush_threads", flag: "--cacheFlushThreads=", def: "30", min: 1},
 	{key: "block_read_threads", flag: "--blockReadThreads=", def: "32"},
 	{key: "block_cache_size", flag: "--blockCacheSize=", def: "300"},
@@ -81,7 +92,7 @@ func buildExtraParams(params map[string]string) (string, error) {
 			ints[p.key] = n
 		}
 
-		args = append(args, p.flag+value)
+		args = append(args, p.flag+value+p.suffix)
 	}
 
 	if err := checkOrder(ints, "cache_low_threshold", "cache_high_threshold", false); err != nil {

@@ -79,21 +79,56 @@ func TestBuildExtraParamsOverrides(t *testing.T) {
 	}
 }
 
+func TestBuildExtraParamsSnapshot(t *testing.T) {
+	got, err := buildExtraParams(map[string]string{
+		"cache_snapshot_idle_interval": "5000",
+		"cache_snapshot_interval":      "50",
+		"cache_snapshot_gate_mb":       "128",
+		"cache_snapshot_gate_ms":       "1500",
+		"cache_snapshot_drain_timeout": "300000",
+		"cache_snapshot_lease":         "0",
+		"cache_snapshot_max_dirty_mb":  "2048",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, want := range []string{
+		"--nbd-param=cache-snapshot-idle-interval=5000",
+		"--nbd-param=cache-snapshot-interval=50",
+		"--nbd-param=cache-snapshot-gate-bytes=128M",
+		"--nbd-param=cache-snapshot-gate-ms=1500",
+		"--nbd-param=cache-snapshot-drain-timeout=300000",
+		"--nbd-param=cache-snapshot-lease=0",
+		"--nbd-param=cache-snapshot-max-dirty=2048M",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %q", want, got)
+		}
+	}
+}
+
 func TestBuildExtraParamsInvalid(t *testing.T) {
 	cases := map[string]map[string]string{
-		"not an int":        {"cache_flush_threads": "ten"},
-		"negative":          {"cache_flush_interval": "-1"},
-		"below min":         {"nbd_threads": "0"},
-		"above percent":     {"cache_lru_percent": "101"},
-		"not a bool":        {"cache_purge_on_stop": "maybe"},
-		"low above high":    {"cache_high_threshold": "80", "cache_low_threshold": "90"},
-		"low above default": {"cache_low_threshold": "96"},
-		"low equals high":   {"cache_high_threshold": "90", "cache_low_threshold": "90"},
-		"zero lru":          {"cache_lru_percent": "0"},
-		"unknown policy":    {"cache_reclaim_policy": "lfu"},
-		"not power of 2":    {"cache_min_block_size": "6144"},
-		"batch too large":   {"cache_readahead_batch": "65"},
-		"retry pause order": {"initial_retry_pause": "5000"},
+		"not an int":         {"cache_flush_threads": "ten"},
+		"negative":           {"cache_flush_interval": "-1"},
+		"below min":          {"nbd_threads": "0"},
+		"above percent":      {"cache_lru_percent": "101"},
+		"not a bool":         {"cache_purge_on_stop": "maybe"},
+		"low above high":     {"cache_high_threshold": "80", "cache_low_threshold": "90"},
+		"low above default":  {"cache_low_threshold": "96"},
+		"low equals high":    {"cache_high_threshold": "90", "cache_low_threshold": "90"},
+		"zero lru":           {"cache_lru_percent": "0"},
+		"unknown policy":     {"cache_reclaim_policy": "lfu"},
+		"not power of 2":     {"cache_min_block_size": "6144"},
+		"batch too large":    {"cache_readahead_batch": "65"},
+		"retry pause order":  {"initial_retry_pause": "5000"},
+		"snap interval low":  {"cache_snapshot_interval": "5"},
+		"snap idle high":     {"cache_snapshot_idle_interval": "600001"},
+		"snap gate ms zero":  {"cache_snapshot_gate_ms": "0"},
+		"snap drain zero":    {"cache_snapshot_drain_timeout": "0"},
+		"snap gate mb neg":   {"cache_snapshot_gate_mb": "-1"},
+		"snap dirty not int": {"cache_snapshot_max_dirty_mb": "1G"},
 	}
 
 	for name, params := range cases {
