@@ -16,6 +16,9 @@ import (
 // okReply is the plugin's plain success payload.
 const okReply = "ok"
 
+// opSnapshotShow is the plugin op the fakes answer with a record.
+const opSnapshotShow = "snapshot_show"
+
 // fakeGateway stands in for the mgx API gateway: each plugin op is answered by
 // reply (data, error string) and recorded with its request data.
 type fakeGateway struct {
@@ -91,7 +94,7 @@ func newFakeClient(t *testing.T, reply func(op string, data map[string]any) (any
 // (or "Snapshot not found" when status is empty) and ok for everything else.
 func restoreReply(status string) func(string, map[string]any) (any, string) {
 	return func(op string, _ map[string]any) (any, string) {
-		if op == "snapshot_show" {
+		if op == opSnapshotShow {
 			if status == "" {
 				return nil, "Snapshot not found"
 			}
@@ -148,7 +151,7 @@ func TestCleanupRestore(t *testing.T) {
 func TestCleanupRestoreDeleteRefusedRetries(t *testing.T) {
 	client, _ := newFakeClient(t, func(op string, _ map[string]any) (any, string) {
 		switch op {
-		case "snapshot_show":
+		case opSnapshotShow:
 			return map[string]any{"name": "restore-vol-1", "status": "STOPPED"}, ""
 		case "snapshot_del":
 			return nil, "Snapshot is REWINDING, retry once it settles"
@@ -283,5 +286,69 @@ func TestPaginateSnapshots(t *testing.T) {
 	}
 	if _, err := paginateSnapshots(entries, "bogus", 0); err == nil {
 		t.Errorf("invalid token should error")
+	}
+}
+
+func TestHeldByOtherStamp(t *testing.T) {
+	cases := []struct {
+		status, stamp string
+		want          bool
+	}{
+		{"PENDING", "s3", true},
+		{"RUNNING", "s3", true},
+		{"REWINDING", "s3", true},
+		{"STOPPING", "s3", true},
+		{"STOPPED", "s3", true},
+		{"FAILED", "s3", true},
+		{"DELETING", "s3", true},
+		{"READY", "s3", false},
+		{"DELETED", "s3", false},
+		{"PENDING", "s4", false}, // our own stamp
+		{"FAILED", "s4", false},
+	}
+	for _, tc := range cases {
+		rec := &util.SnapshotResp{Status: tc.status, Stamp: tc.stamp}
+		if got := heldByOtherStamp(rec, "s4"); got != tc.want {
+			t.Errorf("%s on %s: got %v, want %v", tc.status, tc.stamp, got, tc.want)
+		}
+	}
+}
+
+func TestArmRestorePoint(t *testing.T) {
+	cases := []struct {
+		name    string
+		rec     map[string]any // snapshot_show reply; nil = not found
+		wantAdd bool
+	}{
+		{"new record", nil, true},
+		{"settled on older point", map[string]any{"status": "READY", "stamp": "s3", "increments": `["s3"]`}, true},
+		{"another point pending", map[string]any{"status": "PENDING", "stamp": "s3", "increments": `["s1"]`}, false},
+		{"another point running", map[string]any{"status": "RUNNING", "stamp": "s3", "increments": `["s1"]`}, false},
+		{"another point failed", map[string]any{"status": "FAILED", "stamp": "s3", "increments": `["s1"]`}, false},
+		{"ours armed", map[string]any{"status": "PENDING", "stamp": "s4", "increments": `["s1"]`}, false},
+		{"ours failed -> re-arm", map[string]any{"status": "FAILED", "stamp": "s4", "increments": `["s1"]`}, true},
+		{"ours committed, newer running", map[string]any{"status": "RUNNING", "stamp": "s5", "increments": `["s4"]`}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client, g := newFakeClient(t, func(op string, _ map[string]any) (any, string) {
+				if op == opSnapshotShow {
+					if tc.rec == nil {
+						return nil, "Snapshot not found"
+					}
+					return tc.rec, ""
+				}
+				return okReply, ""
+			})
+			req := &csi.CreateSnapshotRequest{SourceVolumeId: "vol-1", Name: "s4"}
+			if _, err := armRestorePoint(client, req, "vol-1", "s4", "", &util.LvolResp{}); err != nil && tc.rec != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if add := g.call("snapshot_add"); (add != nil) != tc.wantAdd {
+				t.Errorf("snapshot_add sent = %v, want %v (ops %v)", add != nil, tc.wantAdd, g.ops())
+			} else if add != nil && add.data["stamp"] != "s4" {
+				t.Errorf("snapshot_add stamp = %v, want s4", add.data["stamp"])
+			}
+		})
 	}
 }

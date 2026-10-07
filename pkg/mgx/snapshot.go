@@ -155,7 +155,7 @@ func (cs *controllerServer) CreateSnapshot(_ context.Context, req *csi.CreateSna
 	// in flight on the same record.
 	ready := stampCommitted(rec, stamp)
 
-	if !ready && rec.Status == SnapshotStatusFailed {
+	if !ready && rec.Status == SnapshotStatusFailed && rec.Stamp == stamp {
 		// Re-armed above; the plugin heals (rewind) then the next reconcile
 		// re-runs. Report not-ready so the external-snapshotter keeps retrying
 		// until the backup completes, instead of a terminal error that wedges
@@ -212,10 +212,49 @@ func stampCommitted(rec *util.SnapshotResp, stamp string) bool {
 	return len(stamps) == 0 && rec.Status == SnapshotStatusReady && rec.Stamp == stamp
 }
 
+// heldByOtherStamp reports whether the record is in flight (or parked) for a
+// different restore point, so arming ours now would overwrite that one's armed
+// stamp. Only a settled record may be re-armed for a new stamp: READY, or
+// DELETED (a purged backup starts a fresh chain). A FAILED/STOPPED run is left
+// to its own VolumeSnapshot to heal or abandon. The plugin refuses the same
+// snapshot_add; this keeps the waiting VolumeSnapshot quietly not-ready instead
+// of erroring, and covers plugin nodes that predate that guard.
+func heldByOtherStamp(rec *util.SnapshotResp, stamp string) bool {
+	if rec.Stamp == stamp {
+		return false
+	}
+	switch rec.Status {
+	case SnapshotStatusReady, SnapshotStatusDeleted:
+		return false
+	}
+	return true
+}
+
+// needsArm reports whether an existing record must be (re-)armed for stamp, and
+// logs why not: the stamp is already committed (a re-sync of a finished point;
+// re-arming would start a new run), already armed and not failed, or the record
+// is busy with another stamp.
+func needsArm(rec *util.SnapshotResp, record, stamp string) bool {
+	switch {
+	case stampCommitted(rec, stamp):
+		klog.Infof("CreateSnapshot: restore point already committed, record: %s stamp: %s", record, stamp)
+		return false
+	case rec.Stamp == stamp && rec.Status != SnapshotStatusFailed:
+		klog.Infof("CreateSnapshot: restore point already armed, record: %s stamp: %s status: %s", record, stamp, rec.Status)
+		return false
+	case heldByOtherStamp(rec, stamp):
+		klog.Infof("CreateSnapshot: record %s is %s with stamp %s, waiting to arm %s", record, rec.Status, rec.Stamp, stamp)
+		return false
+	}
+	return true
+}
+
 // armRestorePoint ensures the backup record has this stamp armed and returns its
-// current state. It reads the record, and if it's missing or armed for a
+// current state. It reads the record, and if it's missing or settled on a
 // different stamp, fires the idempotent snapshot_add and re-reads. An already
-// armed record is returned as-is so CreateSnapshot can just poll its status.
+// armed or committed stamp is returned as-is so CreateSnapshot can just poll
+// its status, and so is a record busy with another stamp: that VolumeSnapshot
+// stays not-ready and arms on a later reconcile, once the record settles.
 func armRestorePoint(mgxClient *util.NodeNVMf, req *csi.CreateSnapshotRequest, record, stamp, config string, volume *util.LvolResp) (*util.SnapshotResp, error) {
 	rec, err := mgxClient.ShowSnapshot(record)
 	if err != nil && !errors.Is(err, util.ErrNotFound) {
@@ -223,14 +262,13 @@ func armRestorePoint(mgxClient *util.NodeNVMf, req *csi.CreateSnapshotRequest, r
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	if err == nil && rec.Stamp == stamp && rec.Status != SnapshotStatusFailed {
-		klog.Infof("CreateSnapshot: restore point already armed, record: %s stamp: %s status: %s", record, stamp, rec.Status)
+	if err == nil && !needsArm(rec, record, stamp) {
 		return rec, nil
 	}
 
-	// Record missing, armed for a different stamp, or FAILED (needs heal/re-arm):
-	// arm this restore point. On a FAILED record the plugin turns this idempotent
-	// snapshot_add into a rewind (REWINDING) that heals the torn state, then
+	// Record missing, settled on a different stamp, or FAILED on ours (needs
+	// heal/re-arm): arm this restore point. On a FAILED record the plugin turns
+	// this idempotent snapshot_add into a rewind (REWINDING) that heals the torn state, then
 	// settles clean so the next call re-arms - so a transient failure self-heals
 	// instead of wedging the snapshot.
 	addParams := map[string]any{
