@@ -405,6 +405,18 @@ func (client *RPCClient) snapshotDel(name, delStamp string, purge bool) error {
 	return err
 }
 
+// snapshotStop cancels a RUNNING snapshot/restore copy (-> STOPPING -> STOPPED).
+func (client *RPCClient) snapshotStop(name string) error {
+	params := map[string]any{
+		"name": name,
+	}
+
+	klog.V(5).Infof("snapshotStop: %v", &params)
+
+	_, err := client.Call("snapshot", "snapshot_stop", &params)
+	return err
+}
+
 func (client *RPCClient) snapshotList() ([]*SnapshotResp, error) {
 	params := map[string]any{}
 

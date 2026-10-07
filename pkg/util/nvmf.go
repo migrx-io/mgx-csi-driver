@@ -165,6 +165,15 @@ func (node *NodeNVMf) DeleteSnapshot(name, delStamp string, purge bool) error {
 	return nil
 }
 
+// StopSnapshot cancels a RUNNING snapshot/restore copy.
+func (node *NodeNVMf) StopSnapshot(name string) error {
+	if err := node.Client.snapshotStop(name); err != nil {
+		return err
+	}
+	klog.V(5).Infof("snapshot stopping: %s", name)
+	return nil
+}
+
 func (node *NodeNVMf) UnpublishVolume(lvolID string) error {
 	err := node.Client.unpublishVolume(lvolID)
 	if err != nil {

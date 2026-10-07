@@ -259,6 +259,7 @@ func (ns *nodeServer) formatMount(initiator util.MGXCsiInitiator, volumeID, devi
 	klog.Infof("NodePublishVolume: formatting+mounting, volumeID: %s device: %s -> %s flags: %v", volumeID, devicePath, targetPath, mntFlags)
 	err := sfMounter.FormatAndMount(devicePath, targetPath, "ext4", mntFlags)
 	if err == nil {
+		growFs(volumeID, devicePath, targetPath)
 		return nil
 	}
 	if !isFsckUncorrectable(err) {
@@ -283,6 +284,28 @@ func (ns *nodeServer) formatMount(initiator util.MGXCsiInitiator, volumeID, devi
 		return serr
 	}
 	return fmt.Errorf("restart repair: stopped volume %s after unrecoverable fsck; retry after it restarts", volumeID)
+}
+
+// growFs grows a mounted filesystem to its device. A volume restored from a
+// smaller snapshot is provisioned at the snapshot size and then grown to the
+// PVC's capacity, so its filesystem starts out smaller than the device and no
+// NodeExpandVolume follows. Online ext4 resize; best-effort - on failure the
+// volume is still usable at its old size.
+func growFs(volumeID, devicePath, targetPath string) {
+	resizer := mount.NewResizeFs(exec.New())
+	need, err := resizer.NeedResize(devicePath, targetPath)
+	if err != nil {
+		klog.Warningf("growFs: check volumeID: %s device: %s: %v", volumeID, devicePath, err)
+		return
+	}
+	if !need {
+		return
+	}
+	if _, err := resizer.Resize(devicePath, targetPath); err != nil {
+		klog.Warningf("growFs: resize volumeID: %s device: %s: %v", volumeID, devicePath, err)
+		return
+	}
+	klog.Infof("growFs: grew filesystem to device, volumeID: %s device: %s", volumeID, devicePath)
 }
 
 // isFsckUncorrectable reports whether a SafeFormatAndMount error is the

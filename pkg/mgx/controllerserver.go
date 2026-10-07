@@ -82,6 +82,15 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s is creating", volumeID))
 	}
 
+	// A restore provisions the volume at the snapshot's size; grow it to the
+	// PVC's requested capacity (stop -> resize -> start) before publishing, so
+	// the device matches the CapacityBytes reported below.
+	if req.GetVolumeContentSource().GetSnapshot() != nil {
+		if gerr := cs.ensureRestoredSize(volumeID, volume, req, mgxClient); gerr != nil {
+			return nil, gerr
+		}
+	}
+
 	// there is no errors, check is state is READY
 	if volume.Status != VolumeStatusReady {
 		klog.V(5).Infof("volume: %v is not READY", volume)
@@ -103,10 +112,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	// data, purge=false - the target IS this volume) so a future PVC with the
 	// same name isn't blocked by a stale record. Best-effort.
 	if req.GetVolumeContentSource().GetSnapshot() != nil {
-		restoreName := restoreNamePrefix + volumeID
-		if derr := mgxClient.DeleteSnapshot(restoreName, "", false); derr != nil && !errors.Is(derr, util.ErrNotFound) {
-			klog.Warningf("CreateVolume: cleanup restore record %s failed (ignored): %s", restoreName, derr)
-		}
+		dropRestoreRecord(mgxClient, volumeID)
 	}
 
 	csiVolume := cs.GetCSIVolume(req)
@@ -233,13 +239,18 @@ func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 
 	klog.V(5).Info("mgxClient is created..")
 
-	// Drop any lingering restore-<vol> bookkeeping record (e.g. a restore the
-	// user gave up on). Done before the volume lookup so it also clears records
-	// for volumes that never finished provisioning. Keep the data (purge=false)
-	// - the storage volume itself is removed below. Best-effort.
+	// Drop any restore-<vol> record first (e.g. a restore the user gave up
+	// on), before the volume lookup: a restore still copying would otherwise
+	// provision this volume after we reported it deleted, leaving a volume
+	// nobody owns. Wait until it can no longer provision; a volume it already
+	// created is then found and removed below.
 	restoreName := restoreNamePrefix + volumeID
-	if derr := mgxClient.DeleteSnapshot(restoreName, "", false); derr != nil && !errors.Is(derr, util.ErrNotFound) {
-		klog.Warningf("DeleteVolume: cleanup restore record %s failed (ignored): %s", restoreName, derr)
+	done, err := cleanupRestore(mgxClient, restoreName)
+	if err != nil {
+		return nil, err
+	}
+	if !done {
+		return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s: restore %s is stopping", volumeID, restoreName))
 	}
 
 	// check if volume exists and DELETED
@@ -822,4 +833,105 @@ func newControllerServer(d *csicommon.CSIDriver, conf *util.Config) *controllerS
 		conf:                    conf,
 	}
 	return &server
+}
+
+// cleanupRestore drops the restore-<vol> record of a volume being deleted and
+// reports whether it can no longer provision the volume. A RUNNING copy is
+// stopped first and waited on (STOPPING/REWINDING); a record that never
+// provisioned (PENDING/FAILED/STOPPED) also purges its partial target data,
+// while a READY one keeps it - the target is the volume, deleted by the caller.
+func cleanupRestore(mgxClient *util.NodeNVMf, restoreName string) (bool, error) {
+	rec, err := mgxClient.ShowSnapshot(restoreName)
+	if errors.Is(err, util.ErrNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		klog.Errorf("cleanupRestore: show restore record %s: %s", restoreName, err)
+		return false, status.Error(codes.Internal, err.Error())
+	}
+
+	purge := true
+	switch rec.Status {
+	case SnapshotStatusDeleting, SnapshotStatusDeleted:
+		// a delete owns it: nothing provisions any more
+		return true, nil
+	case SnapshotStatusRunning:
+		if serr := mgxClient.StopSnapshot(restoreName); serr != nil {
+			klog.Warningf("cleanupRestore: stop restore %s (retrying): %s", restoreName, serr)
+		}
+		return false, nil
+	case SnapshotStatusStopping, SnapshotStatusRewinding:
+		return false, nil
+	case SnapshotStatusReady:
+		purge = false
+	}
+
+	if derr := mgxClient.DeleteSnapshot(restoreName, "", purge); derr != nil && !errors.Is(derr, util.ErrNotFound) {
+		klog.Warningf("cleanupRestore: delete restore record %s (retrying): %s", restoreName, derr)
+		return false, nil
+	}
+	return true, nil
+}
+
+// growRestored resizes a restore-provisioned volume up to the PVC's requested
+// capacity. It drives one step per call (stop, resize, start) and returns true
+// once the volume is at least the requested size and not left stopped. Called
+// only from CreateVolume for a restore whose volume exists, so a STOPPED volume
+// here is one this flow stopped to resize.
+func (cs *controllerServer) growRestored(volumeID string, volume *util.LvolResp, req *csi.CreateVolumeRequest, mgxClient *util.NodeNVMf) (bool, error) {
+	want := util.BytesToMB(req.GetCapacityRange().GetRequiredBytes())
+
+	if want <= 0 || int64(volume.Size) >= want {
+		if volume.Status == VolumeStatusStopped {
+			if err := cs.startVolume(volumeID, mgxClient); err != nil {
+				klog.Errorf("growRestored: start volume %s: %s", volumeID, err)
+				return false, status.Error(codes.Internal, err.Error())
+			}
+			klog.Infof("growRestored: volume %s resized to %d MB, starting", volumeID, volume.Size)
+			return false, nil
+		}
+		return true, nil
+	}
+
+	switch volume.Status {
+	case VolumeStatusStopped:
+		if err := cs.resizeVolume(volumeID, mgxClient, want); err != nil {
+			klog.Errorf("growRestored: resize volume %s to %d MB: %s", volumeID, want, err)
+			return false, status.Error(codes.Internal, err.Error())
+		}
+		klog.Infof("growRestored: volume %s resizing %d -> %d MB", volumeID, volume.Size, want)
+	case VolumeStatusReady:
+		if err := cs.stopVolume(volumeID, mgxClient); err != nil {
+			klog.Errorf("growRestored: stop volume %s: %s", volumeID, err)
+			return false, status.Error(codes.Internal, err.Error())
+		}
+		klog.Infof("growRestored: volume %s is %d MB < requested %d MB, stopping to resize", volumeID, volume.Size, want)
+	default:
+		// still provisioning / transitioning: wait for it to settle
+		klog.V(5).Infof("growRestored: volume %s is %s, waiting to resize", volumeID, volume.Status)
+	}
+	return false, nil
+}
+
+// ensureRestoredSize returns nil once a restored volume is at the requested
+// capacity, else Aborted while growRestored drives the resize.
+func (cs *controllerServer) ensureRestoredSize(volumeID string, volume *util.LvolResp, req *csi.CreateVolumeRequest, mgxClient *util.NodeNVMf) error {
+	grown, err := cs.growRestored(volumeID, volume, req, mgxClient)
+	if err != nil {
+		return err
+	}
+	if !grown {
+		return status.Error(codes.Aborted, fmt.Sprintf("volume %s is resizing to the requested capacity", volumeID))
+	}
+	return nil
+}
+
+// dropRestoreRecord removes the restore-<vol> record of a published restored
+// volume (keeping the data, purge=false - the target IS this volume) so a
+// future PVC with the same name isn't blocked by a stale record. Best-effort.
+func dropRestoreRecord(mgxClient *util.NodeNVMf, volumeID string) {
+	restoreName := restoreNamePrefix + volumeID
+	if derr := mgxClient.DeleteSnapshot(restoreName, "", false); derr != nil && !errors.Is(derr, util.ErrNotFound) {
+		klog.Warningf("CreateVolume: cleanup restore record %s failed (ignored): %s", restoreName, derr)
+	}
 }

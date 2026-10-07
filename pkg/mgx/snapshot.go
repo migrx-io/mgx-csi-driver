@@ -2,8 +2,10 @@ package mgx
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -20,8 +22,13 @@ import (
 const (
 	// Snapshot plugin statuses (subset the driver branches on). The full set is
 	// PENDING -> RUNNING -> READY|FAILED, plus STOPPING/STOPPED, DELETING/DELETED.
-	SnapshotStatusReady  = "READY"
-	SnapshotStatusFailed = "FAILED"
+	SnapshotStatusReady     = "READY"
+	SnapshotStatusFailed    = "FAILED"
+	SnapshotStatusRunning   = "RUNNING"
+	SnapshotStatusStopping  = "STOPPING"
+	SnapshotStatusRewinding = "REWINDING"
+	SnapshotStatusDeleting  = "DELETING"
+	SnapshotStatusDeleted   = "DELETED"
 
 	// snapshotIDSep joins the backup record name and the restore-point stamp
 	// into the CSI snapshot_id: "<record>@<stamp>".
@@ -142,24 +149,20 @@ func (cs *controllerServer) CreateSnapshot(_ context.Context, req *csi.CreateSna
 		sizeBytes = int64(volume.Size) * bytesPerMB
 	}
 
-	if rec.Status == SnapshotStatusFailed {
+	// Ready means THIS restore point is committed on the chain - not merely
+	// that the record is READY (it may be settled on another stamp, ex after
+	// a rewind cleared a failed one), nor not-ready because a newer point is
+	// in flight on the same record.
+	ready := stampCommitted(rec, stamp)
+
+	if !ready && rec.Status == SnapshotStatusFailed {
 		// Re-armed above; the plugin heals (rewind) then the next reconcile
 		// re-runs. Report not-ready so the external-snapshotter keeps retrying
 		// until the backup completes, instead of a terminal error that wedges
 		// the VolumeSnapshot at not-ready forever.
 		klog.Warningf("CreateSnapshot: snapshot %s FAILED (%s), re-arming for retry", snapshotID, rec.Error)
-		return &csi.CreateSnapshotResponse{
-			Snapshot: &csi.Snapshot{
-				SizeBytes:      sizeBytes,
-				SnapshotId:     snapshotID,
-				SourceVolumeId: volumeID,
-				CreationTime:   parseSnapshotTime(rec.Created),
-				ReadyToUse:     false,
-			},
-		}, nil
 	}
 
-	ready := rec.Status == SnapshotStatusReady
 	klog.Infof("CreateSnapshot: snapshotID=%s status=%s ready=%v sizeBytes=%d", snapshotID, rec.Status, ready, sizeBytes)
 
 	// ReadyToUse=false makes the external-snapshotter re-call (idempotent on the
@@ -173,6 +176,40 @@ func (cs *controllerServer) CreateSnapshot(_ context.Context, req *csi.CreateSna
 			ReadyToUse:     ready,
 		},
 	}, nil
+}
+
+// recordStamps returns a record's committed restore points, oldest first. The
+// plugin returns increments as a JSON-encoded string or as a list.
+func recordStamps(rec *util.SnapshotResp) []string {
+	var out []string
+	switch v := rec.Increments.(type) {
+	case string:
+		if v != "" {
+			if err := json.Unmarshal([]byte(v), &out); err != nil {
+				klog.Warningf("recordStamps: %s: bad increments %q: %v", rec.Name, v, err)
+			}
+		}
+	case []any:
+		for _, s := range v {
+			if str, ok := s.(string); ok {
+				out = append(out, str)
+			}
+		}
+	}
+	return out
+}
+
+// stampCommitted reports whether stamp is a finished restore point of rec. A
+// flat (non-incremental) backup keeps no chain; its one point is the READY
+// record's stamp.
+func stampCommitted(rec *util.SnapshotResp, stamp string) bool {
+	stamps := recordStamps(rec)
+	for _, s := range stamps {
+		if s == stamp {
+			return true
+		}
+	}
+	return len(stamps) == 0 && rec.Status == SnapshotStatusReady && rec.Stamp == stamp
 }
 
 // armRestorePoint ensures the backup record has this stamp armed and returns its
@@ -288,12 +325,18 @@ func (cs *controllerServer) DeleteSnapshot(_ context.Context, req *csi.DeleteSna
 func (*controllerServer) scheduleRestore(req *csi.CreateVolumeRequest, mgxClient *util.NodeNVMf, restoreName, record, stamp, volumeID, volumeConfig string) error {
 	// validate the source exists (fail fast with a clear NotFound); its
 	// config/node are intentionally not copied onto the restore (see above).
-	if _, serr := mgxClient.ShowSnapshot(record); serr != nil {
+	src, serr := mgxClient.ShowSnapshot(record)
+	if serr != nil {
 		if errors.Is(serr, util.ErrNotFound) {
 			return status.Errorf(codes.NotFound, "source snapshot %s not found", record)
 		}
 		klog.Errorf("scheduleRestore: show source snapshot, record: %s err: %s", record, serr)
 		return status.Error(codes.Internal, serr.Error())
+	}
+	// A backup being deleted can't be restored (the plugin fails such a
+	// restore); don't re-arm it on every retry, report why instead.
+	if src.Status == SnapshotStatusDeleting || src.Status == SnapshotStatusDeleted {
+		return status.Errorf(codes.FailedPrecondition, "source snapshot %s is %s", record, src.Status)
 	}
 
 	restoreParams := map[string]any{
@@ -402,4 +445,104 @@ func (cs *controllerServer) restoreVolume(req *csi.CreateVolumeRequest, mgxClien
 	// finds the volume and publishes it once it reaches READY.
 	klog.Infof("restoreVolume: restore %s READY, target volume provisioning", restoreName)
 	return status.Error(codes.Aborted, fmt.Sprintf("restore %s ready, provisioning volume %s", restoreName, volumeID))
+}
+
+// ListSnapshots lists committed restore points as CSI snapshots (one per stamp
+// of each backup record), optionally filtered by snapshot_id or
+// source_volume_id. Used by the external-snapshotter for pre-provisioned
+// (static) VolumeSnapshotContents. starting_token is an index into the sorted
+// result. A record carries no per-stamp time, so creation_time is the record's.
+func (*controllerServer) ListSnapshots(_ context.Context, req *csi.ListSnapshotsRequest) (*csi.ListSnapshotsResponse, error) {
+	mgxClient, err := util.NewMGXClient()
+	if err != nil {
+		klog.Errorf("ListSnapshots: init mgx client, err: %s", err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	var recs []*util.SnapshotResp
+	wantStamp := ""
+	if id := req.GetSnapshotId(); id != "" {
+		record, stamp, perr := parseSnapshotID(id)
+		if perr != nil {
+			return &csi.ListSnapshotsResponse{}, nil
+		}
+		rec, serr := mgxClient.ShowSnapshot(record)
+		if errors.Is(serr, util.ErrNotFound) {
+			return &csi.ListSnapshotsResponse{}, nil
+		}
+		if serr != nil {
+			klog.Errorf("ListSnapshots: snapshot_show %s: %s", record, serr)
+			return nil, status.Error(codes.Internal, serr.Error())
+		}
+		recs = []*util.SnapshotResp{rec}
+		wantStamp = stamp
+	} else {
+		recs, err = mgxClient.ListSnapshots()
+		if err != nil {
+			klog.Errorf("ListSnapshots: snapshot_list: %s", err)
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+	}
+
+	entries := listEntries(recs, req.GetSourceVolumeId(), wantStamp)
+	return paginateSnapshots(entries, req.GetStartingToken(), req.GetMaxEntries())
+}
+
+// paginateSnapshots returns one page of entries starting at the index in
+// token (empty = first page), at most maxEntries long (0 = all).
+func paginateSnapshots(entries []*csi.Snapshot, token string, maxEntries int32) (*csi.ListSnapshotsResponse, error) {
+	start := 0
+	if token != "" {
+		n, err := strconv.Atoi(token)
+		if err != nil || n < 0 || n > len(entries) {
+			return nil, status.Errorf(codes.Aborted, "invalid starting_token %q", token)
+		}
+		start = n
+	}
+	end := len(entries)
+	if m := int(maxEntries); m > 0 && start+m < end {
+		end = start + m
+	}
+
+	resp := &csi.ListSnapshotsResponse{}
+	for _, s := range entries[start:end] {
+		resp.Entries = append(resp.Entries, &csi.ListSnapshotsResponse_Entry{Snapshot: s})
+	}
+	if end < len(entries) {
+		resp.NextToken = strconv.Itoa(end)
+	}
+	return resp, nil
+}
+
+// listEntries expands backup records into CSI snapshots, one per committed
+// stamp, sorted by record then chain order (stable across pages).
+func listEntries(recs []*util.SnapshotResp, sourceVolumeID, wantStamp string) []*csi.Snapshot {
+	sort.SliceStable(recs, func(i, j int) bool { return recs[i].Name < recs[j].Name })
+
+	var out []*csi.Snapshot
+	for _, rec := range recs {
+		if rec.Kind == "restore" {
+			continue
+		}
+		if sourceVolumeID != "" && rec.Volume != sourceVolumeID {
+			continue
+		}
+		stamps := recordStamps(rec)
+		if len(stamps) == 0 && rec.Status == SnapshotStatusReady && rec.Stamp != "" {
+			stamps = []string{rec.Stamp} // flat backup: its one point
+		}
+		for _, stamp := range stamps {
+			if wantStamp != "" && stamp != wantStamp {
+				continue
+			}
+			out = append(out, &csi.Snapshot{
+				SnapshotId:     makeSnapshotID(rec.Name, stamp),
+				SourceVolumeId: rec.Volume,
+				SizeBytes:      rec.Size * bytesPerMB,
+				CreationTime:   parseSnapshotTime(rec.Created),
+				ReadyToUse:     true,
+			})
+		}
+	}
+	return out
 }
