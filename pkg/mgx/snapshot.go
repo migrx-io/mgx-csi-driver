@@ -89,7 +89,7 @@ func parseSnapshotTime(s string) *timestamppb.Timestamp {
 // VolumeSnapshot is one restore point (stamp) within it. snapshot_add is always
 // the entry point and is idempotent on the caller-supplied stamp, so the
 // sidecar can retry until the record reports READY.
-func (cs *controllerServer) CreateSnapshot(_ context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
+func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
 	volumeID := req.GetSourceVolumeId()
 	if volumeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "source_volume_id missing")
@@ -172,7 +172,7 @@ func (cs *controllerServer) CreateSnapshot(_ context.Context, req *csi.CreateSna
 			SizeBytes:      sizeBytes,
 			SnapshotId:     snapshotID,
 			SourceVolumeId: volumeID,
-			CreationTime:   parseSnapshotTime(rec.Created),
+			CreationTime:   cs.snapshotCreationTime(ctx, rec, stamp),
 			ReadyToUse:     ready,
 		},
 	}, nil

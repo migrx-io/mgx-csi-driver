@@ -26,6 +26,7 @@ type controllerServer struct {
 	*csicommon.DefaultControllerServer
 	volumeLocks *util.VolumeLocks
 	conf        *util.Config
+	snapTimes   snapshotTimer
 }
 
 type mgxVolume struct {
@@ -832,6 +833,15 @@ func newControllerServer(d *csicommon.CSIDriver, conf *util.Config) *controllerS
 		volumeLocks:             util.NewVolumeLocks(),
 		conf:                    conf,
 	}
+
+	// snapshot creation_time comes from the VolumeSnapshot; without an
+	// in-cluster client it falls back to the backup record's time
+	if timer, err := newK8sSnapshotTimer(); err != nil {
+		klog.Warningf("snapshot creation time lookup disabled: %v", err)
+	} else {
+		server.snapTimes = timer
+	}
+
 	return &server
 }
 
