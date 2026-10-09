@@ -235,6 +235,7 @@ which is rendered into a `mgxcsi-secret` Secret:
 | `controller.replicas` | `1` | Controller StatefulSet replicas. |
 | `controller.timeoutVolumeCheck` | `2` | Interval (minutes) at which the reconciler scans all PVs for idle volumes. `0` disables the reconciler. |
 | `controller.idleVolumeMin` | `10` | Minutes a volume may stay unattached (used by no pod) before the reconciler idles/stops it on the backend. |
+| `controller.maxCopyRetries` | `3` | Times a FAILED snapshot or restore copy is re-armed before giving up with an error (delete the VolumeSnapshot / PVC to retry). Counted in memory; a controller restart starts over. `0` retries forever. |
 | `storageclass.create` | `true` | Create the `mgxcsi-sc` StorageClass. |
 | `volumeSnapshotClass.create` | `true` | Create the `mgxcsi-snapshotclass`. |
 | `externalSnapshotter.enabled` | `false` | Deploy a snapshot-controller (only if the cluster has none). |
@@ -420,5 +421,6 @@ The driver binary (`mgxcsi`) is started by the chart with `--controller` or
 | `--controller` / `--node` | `false` | Which server(s) to run. |
 | `--timeout-volume-check` | `2` | Reconciler scan interval (minutes); `0` disables it. |
 | `--idle-volume-min` | `10` | Minutes unattached before a volume is idled/stopped. |
+| `--max-copy-retries` | `3` | Re-arms of a FAILED snapshot/restore copy before CreateSnapshot/CreateVolume give up; `0` = unlimited. |
 
 NVMe-oF and volume-clean flags mirror the `node.*` Helm values above.

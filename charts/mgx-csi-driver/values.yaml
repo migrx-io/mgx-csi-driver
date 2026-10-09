@@ -160,6 +160,10 @@ controller:
   tolerations: {}
   timeoutVolumeCheck: 2
   idleVolumeMin: 10
+  # Times a FAILED snapshot or restore copy is re-armed before CreateSnapshot /
+  # CreateVolume give up with an error (delete the VolumeSnapshot / PVC to try
+  # again). Counted in memory, so a controller restart starts over. 0 = forever.
+  maxCopyRetries: 3
 
 node:
   nodeSelector: {}

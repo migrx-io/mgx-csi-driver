@@ -27,6 +27,7 @@ type controllerServer struct {
 	volumeLocks *util.VolumeLocks
 	conf        *util.Config
 	snapTimes   snapshotTimer
+	copyRetries *copyRetries
 }
 
 type mgxVolume struct {
@@ -253,6 +254,7 @@ func (cs *controllerServer) DeleteVolume(_ context.Context, req *csi.DeleteVolum
 	if !done {
 		return nil, status.Error(codes.Aborted, fmt.Sprintf("volume %s: restore %s is stopping", volumeID, restoreName))
 	}
+	cs.copyRetries.reset(restoreName)
 
 	// check if volume exists and DELETED
 	volume, err := mgxClient.GetVolume(volumeID)
@@ -832,6 +834,7 @@ func newControllerServer(d *csicommon.CSIDriver, conf *util.Config) *controllerS
 		DefaultControllerServer: csicommon.NewDefaultControllerServer(d),
 		volumeLocks:             util.NewVolumeLocks(),
 		conf:                    conf,
+		copyRetries:             newCopyRetries(conf.MaxCopyRetries),
 	}
 
 	// snapshot creation_time comes from the VolumeSnapshot; without an

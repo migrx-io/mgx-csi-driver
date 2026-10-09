@@ -341,7 +341,7 @@ func TestArmRestorePoint(t *testing.T) {
 				return okReply, ""
 			})
 			req := &csi.CreateSnapshotRequest{SourceVolumeId: "vol-1", Name: "s4"}
-			if _, err := armRestorePoint(client, req, "vol-1", "s4", "", &util.LvolResp{}); err != nil && tc.rec != nil {
+			if _, err := armRestorePoint(client, nil, req, "vol-1", "s4", "", &util.LvolResp{}); err != nil && tc.rec != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if add := g.call("snapshot_add"); (add != nil) != tc.wantAdd {

@@ -137,7 +137,7 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 	// ReadyToUse=true (and again on later re-syncs); snapshot_add must fire only
 	// once per stamp, not on every reconcile. A record whose current Stamp
 	// already equals ours means the increment is armed - just poll its status.
-	rec, err := armRestorePoint(mgxClient, req, record, stamp, config, volume)
+	rec, err := armRestorePoint(mgxClient, cs.copyRetries, req, record, stamp, config, volume)
 	if err != nil {
 		return nil, err
 	}
@@ -154,6 +154,9 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 	// a rewind cleared a failed one), nor not-ready because a newer point is
 	// in flight on the same record.
 	ready := stampCommitted(rec, stamp)
+	if ready {
+		cs.copyRetries.reset(snapshotID)
+	}
 
 	if !ready && rec.Status == SnapshotStatusFailed && rec.Stamp == stamp {
 		// Re-armed above; the plugin heals (rewind) then the next reconcile
@@ -249,13 +252,33 @@ func needsArm(rec *util.SnapshotResp, record, stamp string) bool {
 	return true
 }
 
+// retryFailedRun counts a re-arm when the record's FAILED run is ours, and
+// returns FailedPrecondition once the retry cap is reached so CreateSnapshot
+// stops re-running a copy that keeps failing.
+func retryFailedRun(retries *copyRetries, rec *util.SnapshotResp, record, stamp string) error {
+	if rec.Stamp != stamp || rec.Status != SnapshotStatusFailed {
+		return nil
+	}
+	snapshotID := makeSnapshotID(record, stamp)
+	attempts, ok := retries.retry(snapshotID)
+	if !ok {
+		klog.Errorf("CreateSnapshot: snapshot %s failed after %d re-arms, giving up: %s", snapshotID, attempts, rec.Error)
+		return status.Errorf(codes.FailedPrecondition,
+			"snapshot %s failed after %d retries, giving up: %s; delete the VolumeSnapshot to retry", snapshotID, attempts, rec.Error)
+	}
+	klog.Warningf("CreateSnapshot: snapshot %s FAILED (%s), re-arm %d", snapshotID, rec.Error, attempts)
+	return nil
+}
+
 // armRestorePoint ensures the backup record has this stamp armed and returns its
 // current state. It reads the record, and if it's missing or settled on a
 // different stamp, fires the idempotent snapshot_add and re-reads. An already
 // armed or committed stamp is returned as-is so CreateSnapshot can just poll
 // its status, and so is a record busy with another stamp: that VolumeSnapshot
 // stays not-ready and arms on a later reconcile, once the record settles.
-func armRestorePoint(mgxClient *util.NodeNVMf, req *csi.CreateSnapshotRequest, record, stamp, config string, volume *util.LvolResp) (*util.SnapshotResp, error) {
+func armRestorePoint(mgxClient *util.NodeNVMf, retries *copyRetries, req *csi.CreateSnapshotRequest,
+	record, stamp, config string, volume *util.LvolResp,
+) (*util.SnapshotResp, error) {
 	rec, err := mgxClient.ShowSnapshot(record)
 	if err != nil && !errors.Is(err, util.ErrNotFound) {
 		klog.Errorf("CreateSnapshot: snapshot_show failed, record: %s err: %s", record, err)
@@ -264,6 +287,12 @@ func armRestorePoint(mgxClient *util.NodeNVMf, req *csi.CreateSnapshotRequest, r
 
 	if err == nil && !needsArm(rec, record, stamp) {
 		return rec, nil
+	}
+
+	if err == nil {
+		if cerr := retryFailedRun(retries, rec, record, stamp); cerr != nil {
+			return nil, cerr
+		}
 	}
 
 	// Record missing, settled on a different stamp, or FAILED on ours (needs
@@ -328,6 +357,8 @@ func (cs *controllerServer) DeleteSnapshot(_ context.Context, req *csi.DeleteSna
 
 	unlock := cs.volumeLocks.Lock(record)
 	defer unlock()
+
+	cs.copyRetries.reset(csiSnapshotID)
 
 	mgxClient, err := util.NewMGXClient()
 	if err != nil {
@@ -445,6 +476,11 @@ func (cs *controllerServer) restoreVolume(req *csi.CreateVolumeRequest, mgxClien
 
 	restoreName := restoreNamePrefix + volumeID
 
+	// Given up on: never schedule it again, only finish dropping what's left.
+	if attempts, lastErr, ok := cs.copyRetries.givenUp(restoreName); ok {
+		return abandonRestore(mgxClient, restoreName, attempts, lastErr)
+	}
+
 	rec, err := mgxClient.ShowSnapshot(restoreName)
 	if err != nil && !errors.Is(err, util.ErrNotFound) {
 		klog.Errorf("restoreVolume: show restore record, restoreName: %s err: %s", restoreName, err)
@@ -466,7 +502,13 @@ func (cs *controllerServer) restoreVolume(req *csi.CreateVolumeRequest, mgxClien
 		// partial target) and keep driving it, so a transient failure self-heals
 		// instead of wedging the PVC. The error is surfaced via the Aborted
 		// message while it retries.
-		klog.Warningf("restoreVolume: restore %s FAILED (%s), re-arming", restoreName, rec.Error)
+		attempts, ok := cs.copyRetries.retry(restoreName)
+		if !ok {
+			klog.Errorf("restoreVolume: restore %s failed after %d re-arms, giving up: %s", restoreName, attempts, rec.Error)
+			cs.copyRetries.giveUp(restoreName, rec.Error)
+			return abandonRestore(mgxClient, restoreName, attempts, rec.Error)
+		}
+		klog.Warningf("restoreVolume: restore %s FAILED (%s), re-arm %d", restoreName, rec.Error, attempts)
 		if serr := cs.scheduleRestore(req, mgxClient, restoreName, record, stamp, volumeID, volumeConfig); serr != nil {
 			return serr
 		}
@@ -481,8 +523,21 @@ func (cs *controllerServer) restoreVolume(req *csi.CreateVolumeRequest, mgxClien
 	// Restore READY: the plugin has provisioned the target storage volume.
 	// Bounce through one more reconcile tick so the normal CreateVolume path
 	// finds the volume and publishes it once it reaches READY.
+	cs.copyRetries.reset(restoreName)
 	klog.Infof("restoreVolume: restore %s READY, target volume provisioning", restoreName)
 	return status.Error(codes.Aborted, fmt.Sprintf("restore %s ready, provisioning volume %s", restoreName, volumeID))
+}
+
+// abandonRestore drops a restore given up on - its record and partial target
+// data - and returns the terminal error. No PV was created for it, so
+// DeleteVolume never runs to clean it up once the PVC is deleted. A cleanup
+// that hasn't finished yet (a copy still stopping) is redone on the next call.
+func abandonRestore(mgxClient *util.NodeNVMf, restoreName string, attempts int, lastErr string) error {
+	if done, err := cleanupRestore(mgxClient, restoreName); err != nil || !done {
+		klog.Warningf("restoreVolume: abandoned restore %s not cleaned up yet (err: %v), retrying", restoreName, err)
+	}
+	return status.Errorf(codes.FailedPrecondition,
+		"restore %s failed after %d retries, giving up: %s; delete and recreate the PVC to retry", restoreName, attempts, lastErr)
 }
 
 // ListSnapshots lists committed restore points as CSI snapshots (one per stamp

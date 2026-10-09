@@ -68,4 +68,6 @@ type Config struct {
 	IsNodeServer       bool
 	IdleVolumeMin      int
 	Timeout            int
+	// Re-arms of a FAILED snapshot or restore copy before giving up; 0 = unlimited.
+	MaxCopyRetries int
 }

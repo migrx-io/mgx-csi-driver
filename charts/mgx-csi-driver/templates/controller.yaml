@@ -79,6 +79,7 @@ spec:
         - "--controller"
         - "--timeout-volume-check={{ .Values.controller.timeoutVolumeCheck }}"
         - "--idle-volume-min={{ .Values.controller.idleVolumeMin }}"
+        - "--max-copy-retries={{ .Values.controller.maxCopyRetries }}"
         env:
         - name: NODE_ID
           valueFrom:

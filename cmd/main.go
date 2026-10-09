@@ -27,6 +27,7 @@ func setupFlags() {
 	flag.BoolVar(&conf.IsNodeServer, "node", false, "Start node server")
 	flag.IntVar(&conf.Timeout, "timeout-volume-check", 2, "Volume reconcile timeout")
 	flag.IntVar(&conf.IdleVolumeMin, "idle-volume-min", 10, "Idle volume mins before to stop")
+	flag.IntVar(&conf.MaxCopyRetries, "max-copy-retries", 3, "Times a FAILED snapshot or restore copy is re-armed before CreateSnapshot/CreateVolume give up with an error; counts are in memory and restart with the controller. 0 retries forever")
 	flag.IntVar(&conf.NrIoQueues, "nr-io-queues", 1, "Number of NVMe-oF I/O queues. 1 measured markedly faster than 2 on nvme-tcp (halved latency, doubled sequential throughput at the same queue depth), likely target-side poll-group contention on one bdev")
 	flag.IntVar(&conf.QueueSize, "queue-size", 32, "NVMe-oF submission queue depth, per I/O queue. nr-io-queues * queue-size is the total tags in flight to the target; too few caps throughput at tags/latency regardless of the QoS limits")
 	flag.StringVar(&conf.IOScheduler, "io-scheduler", "none", "Block-layer I/O scheduler written to queue/scheduler on each attached device. `none` matches local NVMe/EBS and is what makes the target's per-operation QoS bind on sequential I/O; empty leaves udev's choice alone")
