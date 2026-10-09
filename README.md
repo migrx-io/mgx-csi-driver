@@ -347,7 +347,7 @@ behavior:
 | `node.queueSize` | `32` | NVMe-oF queue depth per I/O queue. `nrIoQueues * queueSize` is the total tags in flight; throughput is bounded by tags/latency. |
 | `node.ioScheduler` | `none` | Block-layer scheduler for each attached device. `none` matches local NVMe/EBS; `mq-deadline` merges small sequential I/O so the target's per-operation QoS stops binding. `""` leaves udev's choice. |
 | `node.maxSectorsKB` | `256` | Largest single block-layer request (KiB), matching EBS gp3. Clamped to the device's `max_hw_sectors_kb` (the target's advertised MDTS), so nvme-tcp currently lands at 128. `0` leaves the kernel default. |
-| `node.nrRequests` | `0` | Requests the block layer keeps queued per device. Under `none` this is the controller's tag depth and is clamped to it — raise `queueSize`/`nrIoQueues` instead; under `mq-deadline`/`bfq` it sizes the scheduler's own pool and can go deeper. `0` leaves the kernel default. |
+| `node.nrRequests` | `0` | Requests the block layer keeps queued per device. Under `none` this is how many of the controller's tags it may use: it can't exceed the tag depth (raise `queueSize`/`nrIoQueues` for that), and any lower value caps requests in flight — 10 against `queueSize` 32 measured 39-59% fewer IOPS at qd32. Under `mq-deadline`/`bfq` it sizes the scheduler's own pool and can go deeper. `0` leaves the kernel default (the full tag depth). |
 | `node.fastIoFailTmo` | `0` | Seconds to queue I/O on a lost controller before failing fast (`0` = immediate). |
 | `node.ctrlLossTmo` | `10` | Seconds to retry reconnect before removing the controller (≥ `fastIoFailTmo`). |
 | `node.reconnectDelay` | `2` | Pause between reconnect attempts (s). |

@@ -194,14 +194,18 @@ node:
   #   0 leaves the kernel default.
   # nrRequests: how many requests the block layer keeps queued per device.
   #   With ioScheduler "none" there is no scheduler request pool, so this is
-  #   the controller's tag depth and cannot be raised above it -- values that
-  #   overshoot are clamped, and nrIoQueues * queueSize is the knob that
-  #   actually moves the ceiling. With mq-deadline/bfq the pool is separate
-  #   from the tags and can be deeper, giving the scheduler more to merge and
-  #   reorder at the cost of queueing latency. 0 leaves the kernel default.
+  #   the number of the controller's tags the block layer may use: it can't
+  #   go above the tag depth (nrIoQueues * queueSize, less one per queue on
+  #   nvme-tcp), and any lower value caps requests in flight to the target.
+  #   10 against queueSize 32 (31 tags) measured 39-59% fewer IOPS on 4K
+  #   random reads and 8K/16K random writes at qd32, with worse p99, than the
+  #   full 31. 0 leaves the kernel default, which is the full tag depth.
+  #   With mq-deadline/bfq the pool is separate from the tags and can be
+  #   deeper, giving the scheduler more to merge and reorder at the cost of
+  #   queueing latency.
   ioScheduler: "none"
   maxSectorsKB: 128
-  nrRequests: 10
+  nrRequests: 0
   # NVMe-oF connection timeouts (seconds) passed to `nvme connect`.
   # fastIoFailTmo: how long the host queues I/O on a lost controller before
   #   failing fast with EIO. 0 = fail immediately on any controller fault.
