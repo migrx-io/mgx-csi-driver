@@ -10,11 +10,17 @@ import (
 	"k8s.io/klog"
 )
 
+// volumeIdler stops/starts backend volumes; implemented by controllerServer.
+type volumeIdler interface {
+	IdleVolume(volumeID string) error
+	UnIdleVolume(volumeID string) error
+}
+
 type VolumeReconciler struct {
 	kubeClient kubernetes.Interface
 	idle       time.Duration
 	timeout    int
-	cs         *controllerServer
+	cs         volumeIdler
 }
 
 // Create reconciler
@@ -95,15 +101,13 @@ func (r *VolumeReconciler) reconcile(ctx context.Context) {
 		if attachedPV[pvcKey] {
 			klog.V(5).Infof("VolumeReconciler volume attached: %s", pv.Name)
 
-			// check and UNIdle first
+			// refresh on every pass while in use, so idle time counts from the
+			// last pass that saw the volume used, not from when it was first seen
+			r.updateLastUsedAnnotation(pv.Name, &now)
+
+			// check and UNIdle
 			if err := r.cs.UnIdleVolume(volumeID); err != nil {
 				klog.Errorf("unidle volume failed %s: %v", volumeID, err)
-				continue
-			}
-
-			// attached but not tracked
-			if lastUsed.IsZero() {
-				r.updateLastUsedAnnotation(pv.Name, &now)
 			}
 
 			continue
