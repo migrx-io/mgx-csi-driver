@@ -2,12 +2,23 @@ package mgx
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog"
+)
+
+const (
+	// unusedSinceKey marks when the reconciler first saw a PV with no pod using it.
+	// It is written only on in-use <-> unused transitions.
+	unusedSinceKey = "migrx.io/unused-since"
+	// legacyLastUsedKey is the old annotation; removed whenever a PV is patched.
+	legacyLastUsedKey = "migrx.io/last-used"
 )
 
 // volumeIdler stops/starts backend volumes; implemented by controllerServer.
@@ -78,98 +89,84 @@ func (r *VolumeReconciler) reconcile(ctx context.Context) {
 	now := time.Now()
 
 	for i := range pvList.Items {
-		pv := &pvList.Items[i]
+		r.reconcilePV(ctx, &pvList.Items[i], attachedPV, now)
+	}
+}
 
-		if pv.Spec.CSI == nil || pv.Spec.CSI.Driver != "csi.migrx.io" {
-			continue
+// reconcilePV tracks when one PV stopped being used and stops its backend
+// volume once it has been unused for longer than the idle timeout.
+func (r *VolumeReconciler) reconcilePV(ctx context.Context, pv *corev1.PersistentVolume, attachedPV map[string]bool, now time.Time) {
+	if pv.Spec.CSI == nil || pv.Spec.CSI.Driver != "csi.migrx.io" {
+		return
+	}
+
+	// Extract claimRef
+	if pv.Spec.ClaimRef == nil {
+		klog.Infof("PV %s has no ClaimRef → unused", pv.Name)
+		return
+	}
+
+	pvcKey := pv.Spec.ClaimRef.Namespace + "/" + pv.Spec.ClaimRef.Name
+	volumeID := pv.Spec.CSI.VolumeHandle
+
+	_, hasLegacy := pv.Annotations[legacyLastUsedKey]
+	unusedSinceStr, hasUnusedSince := pv.Annotations[unusedSinceKey]
+
+	// in use: clear unused-since (only on the transition) and make sure it runs
+	if attachedPV[pvcKey] {
+		klog.V(5).Infof("VolumeReconciler volume attached: %s", pv.Name)
+
+		if hasUnusedSince || hasLegacy {
+			r.patchUnusedSince(ctx, pv.Name, nil)
 		}
 
-		// Extract claimRef
-		if pv.Spec.ClaimRef == nil {
-			klog.Infof("PV %s has no ClaimRef → unused", pv.Name)
-			continue
+		if err := r.cs.UnIdleVolume(volumeID); err != nil {
+			klog.Errorf("unidle volume failed %s: %v", volumeID, err)
 		}
 
-		pvcKey := pv.Spec.ClaimRef.Namespace + "/" + pv.Spec.ClaimRef.Name
-		volumeID := pv.Spec.CSI.VolumeHandle
+		return
+	}
 
-		// last-used annotation
-		lastUsedStr := pv.Annotations["migrx.io/last-used"]
-		lastUsed, _ := time.Parse(time.RFC3339, lastUsedStr)
+	unusedSince, err := time.Parse(time.RFC3339, unusedSinceStr)
 
-		// If attached → skip
-		if attachedPV[pvcKey] {
-			klog.V(5).Infof("VolumeReconciler volume attached: %s", pv.Name)
+	// just became unused (or the value is unreadable): start counting from now
+	if !hasUnusedSince || err != nil {
+		klog.V(5).Infof("VolumeReconciler volume became unused: %s", pv.Name)
+		r.patchUnusedSince(ctx, pv.Name, &now)
+		return
+	}
 
-			// refresh on every pass while in use, so idle time counts from the
-			// last pass that saw the volume used, not from when it was first seen
-			r.updateLastUsedAnnotation(pv.Name, &now)
+	if now.Sub(unusedSince) > r.idle {
+		klog.Infof("Volumereconciler stopping idle volume %s, unused since %s", volumeID, unusedSinceStr)
 
-			// check and UNIdle
-			if err := r.cs.UnIdleVolume(volumeID); err != nil {
-				klog.Errorf("unidle volume failed %s: %v", volumeID, err)
-			}
-
-			continue
-		}
-
-		klog.V(5).Infof("VolumeReconciler volume is not attached: %s", lastUsed)
-
-		// not attached yet and not have date set
-		if lastUsed.IsZero() {
-			r.updateLastUsedAnnotation(pv.Name, &now)
-			continue
-		}
-
-		if now.Sub(lastUsed) > r.idle {
-			klog.Infof("Volumereconciler stopping idle volume %s", volumeID)
-
-			// init clinet and stop volume
-			if err := r.cs.IdleVolume(volumeID); err != nil {
-				klog.Errorf("idle volume failed %s: %v", volumeID, err)
-				continue
-			}
-			// clear time
-			r.updateLastUsedAnnotation(pv.Name, nil)
+		// unused-since stays: the volume is still unused, and IdleVolume is a
+		// no-op once the backend volume is no longer READY
+		if err := r.cs.IdleVolume(volumeID); err != nil {
+			klog.Errorf("idle volume failed %s: %v", volumeID, err)
 		}
 	}
 }
 
-func (r *VolumeReconciler) updateLastUsedAnnotation(volumeID string, t *time.Time) {
-	ctx := context.Background()
+// patchUnusedSince sets unused-since to t, or removes it when t is nil. The
+// legacy last-used annotation is always removed. A merge patch touches only
+// these keys, so it can't conflict with other writers of the PV.
+func (r *VolumeReconciler) patchUnusedSince(ctx context.Context, pvName string, t *time.Time) {
+	annotations := map[string]any{legacyLastUsedKey: nil, unusedSinceKey: nil}
+	if t != nil {
+		annotations[unusedSinceKey] = t.UTC().Format(time.RFC3339)
+	}
 
-	klog.Infof("nodeServer updating last-used annotation for PV: %s", volumeID)
-
-	pv, err := r.kubeClient.CoreV1().PersistentVolumes().Get(ctx, volumeID, metav1.GetOptions{})
+	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": annotations}})
 	if err != nil {
-		klog.Errorf("nodeServer failed to get PV %s: %v", volumeID, err)
+		klog.Errorf("Volumereconciler failed to build patch for PV %s: %v", pvName, err)
 		return
 	}
 
-	if pv.Annotations == nil {
-		pv.Annotations = map[string]string{}
-	}
+	klog.Infof("Volumereconciler patching PV %s annotations: %s", pvName, patch)
 
-	const key = "migrx.io/last-used"
-
-	if t == nil {
-		// Delete annotation if present
-		if _, exists := pv.Annotations[key]; exists {
-			delete(pv.Annotations, key)
-			klog.Infof("removed last-used annotation from PV %s", volumeID)
-		} else {
-			// nothing to delete
-			return
-		}
-	} else {
-		// Set/update annotation
-		pv.Annotations[key] = t.Format(time.RFC3339)
-	}
-
-	_, err = r.kubeClient.CoreV1().PersistentVolumes().Update(ctx, pv, metav1.UpdateOptions{})
+	_, err = r.kubeClient.CoreV1().PersistentVolumes().Patch(ctx, pvName, types.MergePatchType, patch, metav1.PatchOptions{})
 	if err != nil {
-		klog.Errorf("nodeServer failed to update PV %s annotation: %v", volumeID, err)
-		return
+		klog.Errorf("Volumereconciler failed to patch PV %s: %v", pvName, err)
 	}
 }
 
