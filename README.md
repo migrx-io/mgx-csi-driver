@@ -193,6 +193,9 @@ kubectl get volumesnapshot data-snap -w   # waits for READYTOUSE=true
 With `incremental: "yes"` (the default) each snapshot is an independently
 restorable point in time. With `"no"` snapshots overwrite a single rolling
 latest-only backup and point-in-time restore is not possible.
+A restore must name a point the backup still holds: restoring an older
+VolumeSnapshot of a latest-only backup (or a point no longer in an incremental
+chain) is refused with `FailedPrecondition` instead of restoring other data.
 
 ### Restore from a snapshot
 

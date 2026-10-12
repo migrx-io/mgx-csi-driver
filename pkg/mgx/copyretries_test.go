@@ -97,7 +97,7 @@ func failingRestoreReply(restoreName string) func(op string, data map[string]any
 			deleted = true
 		case op != opSnapshotShow:
 		case data["name"] != restoreName:
-			return map[string]any{"name": data["name"], "kind": "snapshot", "status": "READY"}, ""
+			return map[string]any{"name": data["name"], "kind": "snapshot", "status": "READY", "stamp": "s1"}, ""
 		case deleted:
 			return nil, snapshotNotFoundReply
 		default:

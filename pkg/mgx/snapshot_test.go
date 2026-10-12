@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/migrx-io/mgx-csi-driver/pkg/util"
 )
@@ -91,14 +93,14 @@ func newFakeClient(t *testing.T, reply func(op string, data map[string]any) (any
 }
 
 // restoreReply answers snapshot_show with a restore record in the given status
-// (or "Snapshot not found" when status is empty) and ok for everything else.
-func restoreReply(status string) func(string, map[string]any) (any, string) {
+// (or "Snapshot not found" when it is empty) and ok for everything else.
+func restoreReply(recStatus string) func(string, map[string]any) (any, string) {
 	return func(op string, _ map[string]any) (any, string) {
 		if op == opSnapshotShow {
-			if status == "" {
-				return nil, "Snapshot not found"
+			if recStatus == "" {
+				return nil, snapshotNotFoundReply
 			}
-			return map[string]any{"name": "restore-vol-1", "kind": "restore", "status": status}, ""
+			return map[string]any{"name": "restore-vol-1", "kind": "restore", "status": recStatus}, ""
 		}
 		return okReply, ""
 	}
@@ -334,7 +336,7 @@ func TestArmRestorePoint(t *testing.T) {
 			client, g := newFakeClient(t, func(op string, _ map[string]any) (any, string) {
 				if op == opSnapshotShow {
 					if tc.rec == nil {
-						return nil, "Snapshot not found"
+						return nil, snapshotNotFoundReply
 					}
 					return tc.rec, ""
 				}
@@ -348,6 +350,62 @@ func TestArmRestorePoint(t *testing.T) {
 				t.Errorf("snapshot_add sent = %v, want %v (ops %v)", add != nil, tc.wantAdd, g.ops())
 			} else if add != nil && add.data["stamp"] != "s4" {
 				t.Errorf("snapshot_add stamp = %v, want s4", add.data["stamp"])
+			}
+		})
+	}
+}
+
+// A restore must name a point the backup still holds. The plugin restores
+// whatever the record has, so restoring a point that is gone would silently give
+// another point's data (seen live: a latest-only backup restored the newer
+// snapshot's data for the older VolumeSnapshot). createReq restores vol-src@s1.
+func TestRestoreVolumeRefusesUncommittedPoint(t *testing.T) {
+	restoreName := restoreNamePrefix + util.PvcToVolName("pvc-1")
+	cases := []struct {
+		name    string
+		src     map[string]any
+		want    codes.Code
+		wantMsg string
+	}{
+		{"chain holds the point", map[string]any{"status": "READY", "stamp": "s2", "increments": `["s1","s2"]`}, codes.Aborted, ""},
+		{"chain holds it while a newer point runs", map[string]any{"status": "RUNNING", "stamp": "s3", "increments": `["s1","s2"]`}, codes.Aborted, ""},
+		{"latest-only on the point", map[string]any{"status": "READY", "stamp": "s1"}, codes.Aborted, ""},
+		{"chain lost the point", map[string]any{"status": "READY", "stamp": "s3", "increments": `["s2","s3"]`}, codes.FailedPrecondition, "no longer in backup vol-src"},
+		{"latest-only superseded", map[string]any{"status": "READY", "stamp": "s2"}, codes.FailedPrecondition, "superseded by s2"},
+		{"latest-only being replaced", map[string]any{"status": "RUNNING", "stamp": "s2"}, codes.FailedPrecondition, "being replaced by s2"},
+		{"point still copying", map[string]any{"status": "RUNNING", "stamp": "s1"}, codes.FailedPrecondition, "not committed yet"},
+		{"no point at all", map[string]any{"status": "READY"}, codes.FailedPrecondition, "no committed restore point"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client, g := newFakeClient(t, func(op string, data map[string]any) (any, string) {
+				if op != opSnapshotShow {
+					return okReply, ""
+				}
+				if data["name"] == restoreName {
+					return nil, snapshotNotFoundReply
+				}
+				rec := map[string]any{"name": data["name"], "kind": "snapshot"}
+				for k, v := range tc.src {
+					rec[k] = v
+				}
+				return rec, ""
+			})
+			cs := &controllerServer{copyRetries: newCopyRetries(2)}
+
+			err := cs.restoreVolume(createReq(1024*1024*1024), client)
+			if status.Code(err) != tc.want || !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Fatalf("want %v %q, got %v", tc.want, tc.wantMsg, err)
+			}
+			add := g.call("restore_add")
+			if tc.want != codes.Aborted {
+				if add != nil {
+					t.Fatalf("restore_add sent for an uncommitted point: %+v", add.data)
+				}
+				return
+			}
+			if add == nil || add.data["restore_to"] != "s1" || add.data["snapshot"] != "vol-src" {
+				t.Fatalf("want restore_add of vol-src to s1, got %+v", add)
 			}
 		})
 	}

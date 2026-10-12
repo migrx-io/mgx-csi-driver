@@ -215,6 +215,27 @@ func stampCommitted(rec *util.SnapshotResp, stamp string) bool {
 	return len(stamps) == 0 && rec.Status == SnapshotStatusReady && rec.Stamp == stamp
 }
 
+// uncommittedStampReason explains why stamp is not a restorable point of rec,
+// for the error a restore from it is refused with.
+func uncommittedStampReason(rec *util.SnapshotResp, record, stamp string) string {
+	if stamps := recordStamps(rec); len(stamps) > 0 {
+		return fmt.Sprintf("restore point %s is no longer in backup %s (points: %s)",
+			stamp, record, strings.Join(stamps, ", "))
+	}
+	switch {
+	case rec.Stamp == "":
+		return fmt.Sprintf("backup %s has no committed restore point (%s)", record, rec.Status)
+	case rec.Stamp == stamp:
+		// the point is being written (first copy, or a re-arm of it)
+		return fmt.Sprintf("restore point %s of backup %s is not committed yet (%s)", stamp, record, rec.Status)
+	case rec.Status == SnapshotStatusReady:
+		return fmt.Sprintf("restore point %s of latest-only backup %s was superseded by %s", stamp, record, rec.Stamp)
+	default:
+		return fmt.Sprintf("restore point %s of latest-only backup %s is being replaced by %s (%s)",
+			stamp, record, rec.Stamp, rec.Status)
+	}
+}
+
 // heldByOtherStamp reports whether the record is in flight (or parked) for a
 // different restore point, so arming ours now would overwrite that one's armed
 // stamp. Only a settled record may be re-armed for a new stamp: READY, or
@@ -406,6 +427,15 @@ func (*controllerServer) scheduleRestore(req *csi.CreateVolumeRequest, mgxClient
 	// restore); don't re-arm it on every retry, report why instead.
 	if src.Status == SnapshotStatusDeleting || src.Status == SnapshotStatusDeleted {
 		return status.Errorf(codes.FailedPrecondition, "source snapshot %s is %s", record, src.Status)
+	}
+	// The requested point must still be a committed restore point of the backup.
+	// The plugin restores whatever the record holds, so without this check a
+	// VolumeSnapshot whose point is gone silently restores another point's data:
+	// a latest-only (incremental=no) backup keeps only its newest point, and a
+	// chain can lose points (pruned, or flattened by a later non-incremental
+	// snapshot of the same volume).
+	if !stampCommitted(src, stamp) {
+		return status.Errorf(codes.FailedPrecondition, "%s", uncommittedStampReason(src, record, stamp))
 	}
 
 	restoreParams := map[string]any{
