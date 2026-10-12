@@ -62,8 +62,10 @@ var extraParamDefs = []extraParam{
 	{key: "block_cache_flush_threads", flag: "--cacheFlushThreads=", def: "30", min: 1},
 	// keep flushed ranges of the cache file in the page cache instead of
 	// dropping them (POSIX_FADV_DONTNEED) after the upload, so reads of
-	// recently written data stay off the cache disks. Costs page cache memory.
-	{key: "block_cache_flush_keep_cache", flag: "--cacheFlushKeepCache", def: "", isBool: true, isSwitch: true},
+	// recently written data stay off the cache disks. On by default: mixed
+	// read/write gains far more than QD1 writes and fdatasync lose. Costs page
+	// cache memory on the storage node; "false" turns it off.
+	{key: "block_cache_flush_keep_cache", flag: "--cacheFlushKeepCache", def: "true", isBool: true, isSwitch: true},
 	{key: "block_read_threads", flag: "--blockReadThreads=", def: "32"},
 	{key: "block_cache_size", flag: "--blockCacheSize=", def: "300"},
 	{key: "block_cache_threads", flag: "--blockCacheThreads=", def: "30", min: 1},

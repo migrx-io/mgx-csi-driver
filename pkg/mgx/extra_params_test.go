@@ -32,6 +32,7 @@ const defaultExtraParams = "--nbd-flag=--threads=32 " +
 	"--nbd-param=cache-sync-interval=300 " +
 	"--nbd-param=cache-persist-interval=1000 " +
 	"--cacheFlushThreads=30 " +
+	"--cacheFlushKeepCache " +
 	"--blockReadThreads=32 " +
 	"--blockCacheSize=300 " +
 	"--blockCacheThreads=30 " +
@@ -109,23 +110,26 @@ func TestBuildExtraParamsSnapshot(t *testing.T) {
 }
 
 func TestBuildExtraParamsKeepCache(t *testing.T) {
-	got, err := buildExtraParams(map[string]string{"block_cache_flush_keep_cache": " True "})
+	// on by default: the bare flag, no value
+	got, err := buildExtraParams(map[string]string{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(got, " --cacheFlushKeepCache ") {
-		t.Errorf("true should pass the bare flag: %q", got)
+		t.Errorf("keep cache should be on by default: %q", got)
 	}
 	if strings.Contains(got, "--cacheFlushKeepCache=") {
 		t.Errorf("the flag takes no value: %q", got)
 	}
 
-	got, err = buildExtraParams(map[string]string{"block_cache_flush_keep_cache": "false"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != defaultExtraParams {
-		t.Errorf("false should leave the flag out:\n got: %s\nwant: %s", got, defaultExtraParams)
+	for _, off := range []string{"false", " False ", ""} {
+		got, err = buildExtraParams(map[string]string{"block_cache_flush_keep_cache": off})
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", off, err)
+		}
+		if strings.Contains(got, "--cacheFlushKeepCache") {
+			t.Errorf("%q should leave the flag out: %q", off, got)
+		}
 	}
 }
 
