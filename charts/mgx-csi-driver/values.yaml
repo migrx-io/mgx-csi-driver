@@ -96,6 +96,7 @@ storageclass:
   #   cache_sync_interval: "300"           # --nbd-param=cache-sync-interval (ms)
   #   cache_persist_interval: "1000"       # --nbd-param=cache-persist-interval (ms)
   #   block_cache_flush_threads: "30"      # --cacheFlushThreads
+  #   block_cache_flush_keep_cache: "true" # --cacheFlushKeepCache (unset = off)
   #   block_read_threads: "32"             # --blockReadThreads
   #   block_cache_size: "300"              # --blockCacheSize (blocks of 1M = MiB)
   #   block_cache_threads: "30"            # --blockCacheThreads

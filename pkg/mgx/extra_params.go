@@ -9,15 +9,16 @@ import (
 
 // extraParam maps a StorageClass parameter to an nbdkit plugin flag.
 type extraParam struct {
-	key     string   // StorageClass parameter name
-	flag    string   // flag prefix, the value is appended as is
-	def     string   // used when the parameter is not set; "" = leave flag out
-	isBool  bool     // value is a bool, otherwise a non-negative int
-	choices []string // value is one of these strings, otherwise a non-negative int
-	min     int      // lowest allowed int value
-	max     int      // highest allowed int value, 0 = unbounded
-	pow2    bool     // int value must be a power of 2
-	suffix  string   // appended to the value in the flag, ex "M" for a size in MB
+	key      string   // StorageClass parameter name
+	flag     string   // flag prefix, the value is appended as is
+	def      string   // used when the parameter is not set; "" = leave flag out
+	isBool   bool     // value is a bool, otherwise a non-negative int
+	isSwitch bool     // bool flag without a value: true passes the bare flag, false leaves it out
+	choices  []string // value is one of these strings, otherwise a non-negative int
+	min      int      // lowest allowed int value
+	max      int      // highest allowed int value, 0 = unbounded
+	pow2     bool     // int value must be a power of 2
+	suffix   string   // appended to the value in the flag, ex "M" for a size in MB
 }
 
 // extraParamDefs lists the StorageClass tunables in command line order.
@@ -59,6 +60,10 @@ var extraParamDefs = []extraParam{
 	{key: "cache_snapshot_lease", flag: "--nbd-param=cache-snapshot-lease=", def: ""},
 	{key: "cache_snapshot_max_dirty_mb", flag: "--nbd-param=cache-snapshot-max-dirty=", def: "", suffix: "M"},
 	{key: "block_cache_flush_threads", flag: "--cacheFlushThreads=", def: "30", min: 1},
+	// keep flushed ranges of the cache file in the page cache instead of
+	// dropping them (POSIX_FADV_DONTNEED) after the upload, so reads of
+	// recently written data stay off the cache disks. Costs page cache memory.
+	{key: "block_cache_flush_keep_cache", flag: "--cacheFlushKeepCache", def: "", isBool: true, isSwitch: true},
 	{key: "block_read_threads", flag: "--blockReadThreads=", def: "32"},
 	{key: "block_cache_size", flag: "--blockCacheSize=", def: "300"},
 	{key: "block_cache_threads", flag: "--blockCacheThreads=", def: "30", min: 1},
@@ -90,6 +95,13 @@ func buildExtraParams(params map[string]string) (string, error) {
 		}
 		if isInt {
 			ints[p.key] = n
+		}
+
+		if p.isSwitch {
+			if value == "true" {
+				args = append(args, p.flag)
+			}
+			continue
 		}
 
 		args = append(args, p.flag+value+p.suffix)

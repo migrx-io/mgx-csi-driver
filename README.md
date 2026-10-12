@@ -313,6 +313,7 @@ The StorageClass is created with `volumeBindingMode: Immediate` and
 | `cache_snapshot_lease` | unset (filter: `300000`) | `--nbd-param=cache-snapshot-lease` (`0` = no lease) |
 | `cache_snapshot_max_dirty_mb` | unset (filter: `cache-write-max-size`) | `--nbd-param=cache-snapshot-max-dirty` (MB; `0` = no limit) |
 | `block_cache_flush_threads` | `30` | `--cacheFlushThreads` |
+| `block_cache_flush_keep_cache` | unset (off) | `--cacheFlushKeepCache` when `true` (no value): keep flushed ranges of the cache file in page cache instead of dropping them after upload. Helps reads of recently written data (mixed read/write); costs page cache memory |
 | `block_read_threads` | `32` | `--blockReadThreads` |
 | `block_cache_size` | `300` | `--blockCacheSize` |
 | `block_cache_threads` | `30` | `--blockCacheThreads` |
