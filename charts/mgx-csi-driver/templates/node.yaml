@@ -75,6 +75,7 @@ spec:
         - "--io-scheduler={{ .Values.node.ioScheduler }}"
         - "--max-sectors-kb={{ .Values.node.maxSectorsKB }}"
         - "--nr-requests={{ .Values.node.nrRequests }}"
+        - "--io-timeout={{ .Values.node.ioTimeout }}"
         - "--fast-io-fail-tmo={{ .Values.node.fastIoFailTmo }}"
         - "--ctrl-loss-tmo={{ .Values.node.ctrlLossTmo }}"
         - "--reconnect-delay={{ .Values.node.reconnectDelay }}"

@@ -30,9 +30,14 @@ type Config struct {
 	// so this only ever lowers it there - NrIoQueues/QueueSize are the knobs
 	// that raise it. Under a real scheduler it sizes the scheduler's own
 	// request pool and may go deeper. See tuneBlockQueue.
+	//
+	// IOTimeoutSec: per-request block-layer timeout written to
+	// queue/io_timeout. 0 leaves the kernel value, which on the EKS AMI is
+	// nvme_core.io_timeout=4294967295 (no timeout) - see applyIOTimeout.
 	IOScheduler  string
 	MaxSectorsKB int
 	NrRequests   int
+	IOTimeoutSec int
 
 	// NVMe-oF connection timeouts (seconds), passed to `nvme connect`.
 	ReconnectDelay int

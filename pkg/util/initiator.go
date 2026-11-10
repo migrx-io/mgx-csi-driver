@@ -41,6 +41,7 @@ type initiatorNVMf struct {
 	ioScheduler    string
 	maxSectorsKB   int
 	nrRequests     int
+	ioTimeoutSec   int
 }
 
 func NewMGXClient() (*NodeNVMf, error) {
@@ -83,6 +84,7 @@ func NewMGXCsiInitiator(volumeContext map[string]string, conf *Config) (MGXCsiIn
 		ioScheduler:    conf.IOScheduler,
 		maxSectorsKB:   conf.MaxSectorsKB,
 		nrRequests:     conf.NrRequests,
+		ioTimeoutSec:   conf.IOTimeoutSec,
 	}, nil
 }
 
@@ -153,9 +155,9 @@ func (nvmf *initiatorNVMf) Connect(nrIoQueues, queueSize int) (string, error) {
 
 	// Applied on every Connect, not just when we ran `nvme connect`: the block
 	// device is recreated on reattach and comes back with udev's default.
-	if serr := tuneBlockQueue(devicePath, nvmf.ioScheduler, nvmf.maxSectorsKB, nvmf.nrRequests); serr != nil {
-		// Not fatal - the volume is fully usable, only QoS accounting and
-		// request sizing are left at the kernel's defaults.
+	if serr := tuneBlockQueue(devicePath, nvmf.ioScheduler, nvmf.maxSectorsKB, nvmf.nrRequests, nvmf.ioTimeoutSec); serr != nil {
+		// Not fatal - the volume is usable, only QoS accounting, request
+		// sizing and the I/O timeout are left at the kernel's defaults.
 		klog.Warningf("could not tune block queue for %s: %v", devicePath, serr)
 	}
 
@@ -171,8 +173,8 @@ func (nvmf *initiatorNVMf) Connect(nrIoQueues, queueSize int) (string, error) {
 // first. Writing a value that is already set is a kernel no-op, which makes
 // this idempotent across reconnects. Every attribute is attempted even if an
 // earlier one fails, and the failures are reported together.
-func tuneBlockQueue(devicePath, scheduler string, maxSectorsKB, nrRequests int) error {
-	if scheduler == "" && maxSectorsKB <= 0 && nrRequests <= 0 {
+func tuneBlockQueue(devicePath, scheduler string, maxSectorsKB, nrRequests, ioTimeoutSec int) error {
+	if scheduler == "" && maxSectorsKB <= 0 && nrRequests <= 0 && ioTimeoutSec <= 0 {
 		return nil
 	}
 
@@ -202,7 +204,30 @@ func tuneBlockQueue(devicePath, scheduler string, maxSectorsKB, nrRequests int) 
 		errs = append(errs, applyNrRequests(dev, nrRequests))
 	}
 
+	if ioTimeoutSec > 0 {
+		errs = append(errs, applyIOTimeout(dev, ioTimeoutSec))
+	}
+
 	return errors.Join(errs...)
+}
+
+// applyIOTimeout sets the per-request timeout of the block queue, in ms.
+//
+// The EKS AMI boots with nvme_core.io_timeout=4294967295, the maximum AWS
+// recommends for EBS, and every NVMe device inherits it - nvme-tcp ones
+// included. A request the target never completes then waits forever: on
+// 2026-11-10 eight writes of a freshly restored volume's first fsck were lost,
+// fsck sat in D state for hours, and the controller reset and `nvme disconnect`
+// that followed queued behind them, so only a node reboot cleared it. With a
+// finite timeout the kernel aborts the request and starts NVMe-oF error
+// recovery, after which the request is retried or failed with EIO according to
+// fast-io-fail-tmo and ctrl-loss-tmo.
+//
+// Only this device's queue is changed, so EBS volumes on the node keep the AWS
+// value. The fabrics Connect command of a reconnect is not covered: it runs on
+// the controller's connect queue, which takes nvme_core.io_timeout.
+func applyIOTimeout(dev string, sec int) error {
+	return writeQueueAttrInt(dev, "io_timeout", sec*1000)
 }
 
 // applyScheduler selects the block-layer I/O scheduler.

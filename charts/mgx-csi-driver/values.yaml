@@ -207,6 +207,14 @@ node:
   ioScheduler: "none"
   maxSectorsKB: 128
   nrRequests: 0
+  # ioTimeout: per-request I/O timeout (seconds) written to queue/io_timeout
+  #   of each mgx device only. The EKS AMI sets nvme_core.io_timeout to
+  #   4294967295 (no timeout) for EBS and mgx devices inherit it, so a request
+  #   the target never answers hangs forever and blocks reset/disconnect
+  #   behind it. With a finite value the kernel aborts it and runs NVMe-oF
+  #   error recovery: reconnect, then retry or EIO per fastIoFailTmo and
+  #   ctrlLossTmo. 0 leaves the kernel value.
+  ioTimeout: 30
   # NVMe-oF connection timeouts (seconds) passed to `nvme connect`.
   # fastIoFailTmo: how long the host queues I/O on a lost controller before
   #   failing fast with EIO. 0 = fail immediately on any controller fault.
